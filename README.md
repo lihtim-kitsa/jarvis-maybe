@@ -4,10 +4,6 @@
 
 A fully functional, voice-enabled AI assistant web app inspired by Iron Man's JARVIS, featuring a futuristic HUD interface and agentic capabilities powered by Google's Gemini API.
 
-![JARVIS API Key Modal](file:///C:/Users/astik/.gemini/antigravity-ide/brain/819ef5df-082a-47a6-9776-7e6a508e47a2/jarvis_home_page_1782826927457.png)
-
-![JARVIS UI Demo](file:///C:/Users/astik/.gemini/antigravity-ide/brain/819ef5df-082a-47a6-9776-7e6a508e47a2/jarvis_ui_verification_1782826912559.webp)
-
 ---
 
 ## Architecture
