@@ -27,7 +27,7 @@ graph TD
 |-------|-----------|
 | Frontend | Vanilla HTML/CSS/JS |
 | Backend | Node.js + Express |
-| AI Brain | Gemini 2.5 Flash (free tier) |
+| AI Brain | Gemini 3.1 Flash Lite (for free tier, use Gemini 2.5 Flash) |
 | Voice | Web Speech API (SpeechRecognition + SpeechSynthesis) |
 | Styling | CSS Custom Properties, Glassmorphism, CSS Animations |
 
