@@ -81,6 +81,7 @@ The AI autonomously decides when to use tools based on your request:
 | 📰 News | Headlines by topic | "What's the latest in tech?" |
 | 😄 Jokes | Random jokes | "Tell me a programming joke" |
 | 📊 Diagnostics | Server system status | "Run a system diagnostic" |
+| Open <website> | Opens mentioned website | "Open Youtube (or specific website URL)" |
 
 ### 🔄 State-Reactive UI
 The arc reactor changes color and animation speed based on JARVIS's state:
