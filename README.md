@@ -64,7 +64,7 @@ graph TD
 - JARVIS speaks responses aloud using text-to-speech
 - Auto-selects the best British English voice available
 
-### 🧠 8 Agentic Tools
+### 🧠 9 Agentic Tools
 The AI autonomously decides when to use tools based on your request:
 
 | Tool | What It Does | Example Prompt |
