@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="J.A.R.V.I.S. — Just A Rather Very Intelligent System. An Agentic AI Assistant powered by Gemini.">
+  <title>J.A.R.V.I.S. — AI Assistant</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="/css/index.css">
+  <link rel="stylesheet" href="/css/reactor.css">
+  <link rel="stylesheet" href="/css/hud.css">
+  <link rel="stylesheet" href="/css/chat.css">
+</head>
+<body>
+  <!-- Background Particle Canvas -->
+  <canvas id="particle-canvas"></canvas>
+
+  <!-- Main HUD Container -->
+  <div id="jarvis-hud">
+
+    <!-- Status Bar (Top) -->
+    <header id="status-bar">
+      <div class="status-left">
+        <div class="jarvis-logo">
+          <span class="logo-dot"></span>
+          <span class="logo-text">J.A.R.V.I.S.</span>
+        </div>
+        <div class="status-indicator" id="status-indicator">
+          <span class="status-dot"></span>
+          <span class="status-text" id="status-text">INITIALIZING</span>
+        </div>
+      </div>
+      <div class="status-right">
+        <div class="hud-clock" id="hud-clock">--:--:--</div>
+        <div class="hud-date" id="hud-date">Loading...</div>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="main-content">
+
+      <!-- Left Panel — System Info -->
+      <aside id="system-panels">
+        <div class="hud-panel" id="capabilities-panel">
+          <div class="panel-header">
+            <span class="panel-icon">◆</span>
+            <span class="panel-title">CAPABILITIES</span>
+          </div>
+          <div class="panel-content">
+            <div class="capability-item" data-tool="voice">
+              <span class="cap-icon">🎙</span>
+              <span class="cap-label">Voice Command</span>
+              <span class="cap-status online">ACTIVE</span>
+            </div>
+            <div class="capability-item" data-tool="weather">
+              <span class="cap-icon">🌤</span>
+              <span class="cap-label">Weather Intel</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="search">
+              <span class="cap-icon">🔍</span>
+              <span class="cap-label">Web Search</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="calculate">
+              <span class="cap-icon">🔢</span>
+              <span class="cap-label">Calculator</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="time">
+              <span class="cap-icon">🕐</span>
+              <span class="cap-label">World Clock</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="news">
+              <span class="cap-icon">📰</span>
+              <span class="cap-label">News Feed</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="reminder">
+              <span class="cap-icon">⏰</span>
+              <span class="cap-label">Reminders</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="system">
+              <span class="cap-icon">📊</span>
+              <span class="cap-label">Diagnostics</span>
+              <span class="cap-status online">READY</span>
+            </div>
+            <div class="capability-item" data-tool="website">
+              <span class="cap-icon">🌐</span>
+              <span class="cap-label">Open Tabs</span>
+              <span class="cap-status online">READY</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hud-panel" id="activity-panel">
+          <div class="panel-header">
+            <span class="panel-icon">◆</span>
+            <span class="panel-title">ACTIVITY LOG</span>
+          </div>
+          <div class="panel-content">
+            <div id="activity-log" class="activity-log">
+              <div class="activity-entry">
+                <span class="activity-time">--:--</span>
+                <span class="activity-text">System startup initiated...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center — Arc Reactor -->
+      <div id="reactor-container">
+        <div id="reactor-core">
+          <div class="reactor-ring ring-outer"></div>
+          <div class="reactor-ring ring-middle"></div>
+          <div class="reactor-ring ring-inner"></div>
+          <div class="reactor-center">
+            <div class="reactor-glow"></div>
+            <div class="reactor-pulse"></div>
+          </div>
+          <div class="reactor-label" id="reactor-label">ONLINE</div>
+        </div>
+        <!-- Waveform visualizer (appears when speaking/listening) -->
+        <div id="waveform" class="waveform hidden">
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+          <div class="wave-bar"></div>
+        </div>
+      </div>
+
+      <!-- Right Panel — Chat -->
+      <section id="chat-panel">
+        <div class="panel-header">
+          <span class="panel-icon">◆</span>
+          <span class="panel-title">COMMUNICATIONS</span>
+        </div>
+        <div id="chat-messages" class="chat-messages">
+          <!-- Messages rendered here by JS -->
+        </div>
+        <div id="typing-indicator" class="typing-indicator hidden">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-label">JARVIS is processing...</span>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Input Area (Bottom) -->
+    <footer id="input-area">
+      <div class="input-container">
+        <button id="mic-button" class="mic-button" title="Voice Command (Hold to speak)">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <div class="mic-pulse"></div>
+        </button>
+        <input type="text" id="chat-input" class="chat-input" placeholder="Speak or type a command..." autocomplete="off">
+        <button id="send-button" class="send-button" title="Send">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="input-hint" id="input-hint">
+        Press <kbd>Enter</kbd> to send · Click 🎙 for voice · Say <strong>"Hey JARVIS"</strong> to activate
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- API Key Modal -->
+  <div id="api-key-modal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-reactor">
+        <div class="mini-reactor">
+          <div class="mini-ring"></div>
+          <div class="mini-glow"></div>
+        </div>
+      </div>
+      <h1 class="modal-title">J.A.R.V.I.S.</h1>
+      <p class="modal-subtitle">Just A Rather Very Intelligent System</p>
+      <p class="modal-desc">Enter your Gemini API key to initialize the system. You can get a free key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+      <div class="modal-input-group">
+        <input type="password" id="api-key-input" class="modal-input" placeholder="Enter Gemini API Key...">
+        <button id="api-key-submit" class="modal-submit">INITIALIZE</button>
+      </div>
+      <p class="modal-note">Your key is stored locally and never shared.</p>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/particles.js"></script>
+  <script src="/js/reactor.js"></script>
+  <script src="/js/voice.js"></script>
+  <script src="/js/chat.js"></script>
+  <script src="/js/agent.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

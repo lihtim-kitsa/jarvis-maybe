@@ -1,0 +1,225 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   J.A.R.V.I.S. Chat Interface — chat.css
+   Message bubbles, typing indicator, tool badges, and auto-scroll
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Chat Messages Container ───────────────────────────────────────────── */
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  scroll-behavior: smooth;
+  min-height: 0;
+}
+
+/* ─── Message Wrapper ───────────────────────────────────────────────────── */
+
+.message {
+  display: flex;
+  flex-direction: column;
+  max-width: 90%;
+  animation: fadeInUp 0.3s ease-out;
+}
+
+.message.user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.message.jarvis {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+/* ─── Message Bubble ────────────────────────────────────────────────────── */
+
+.message-bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  font-weight: 500;
+  position: relative;
+}
+
+.message.user .message-bubble {
+  background: linear-gradient(135deg, rgba(0, 119, 255, 0.2), rgba(0, 212, 255, 0.1));
+  border: 1px solid rgba(0, 119, 255, 0.25);
+  border-bottom-right-radius: 4px;
+  color: var(--text-primary);
+}
+
+.message.jarvis .message-bubble {
+  background: rgba(0, 212, 255, 0.05);
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  border-bottom-left-radius: 4px;
+  color: var(--text-primary);
+}
+
+/* ─── Message Metadata ──────────────────────────────────────────────────── */
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: 4px;
+  padding: 0 4px;
+}
+
+.message-sender {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.message.user .message-sender {
+  color: var(--jarvis-blue-dim);
+}
+
+.message.jarvis .message-sender {
+  color: var(--jarvis-cyan-dim);
+}
+
+.message-time {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  letter-spacing: 0.5px;
+}
+
+/* ─── Tool Usage Badge ──────────────────────────────────────────────────── */
+
+.tool-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  letter-spacing: 1px;
+  background: rgba(240, 180, 41, 0.08);
+  border: 1px solid rgba(240, 180, 41, 0.2);
+  color: var(--accent-gold);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.tool-badge::before {
+  content: '⚡';
+  font-size: 0.6rem;
+}
+
+/* ─── Typing Indicator ──────────────────────────────────────────────────── */
+
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.typing-indicator.hidden {
+  display: none;
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--jarvis-cyan);
+  animation: typingBounce 1.4s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(1) { animation-delay: 0s; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+.typing-label {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  letter-spacing: 1.5px;
+}
+
+@keyframes typingBounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+/* ─── Welcome Message ───────────────────────────────────────────────────── */
+
+.welcome-message {
+  text-align: center;
+  padding: var(--space-xl) var(--space-md);
+  animation: fadeIn 1s ease-out;
+}
+
+.welcome-icon {
+  font-size: 2rem;
+  margin-bottom: var(--space-sm);
+  opacity: 0.6;
+}
+
+.welcome-title {
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  color: var(--jarvis-cyan);
+  letter-spacing: 2px;
+  margin-bottom: var(--space-sm);
+}
+
+.welcome-subtitle {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-width: 250px;
+  margin: 0 auto;
+}
+
+/* ─── Tool Result Cards ─────────────────────────────────────────────────── */
+
+.tool-result {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(240, 180, 41, 0.04);
+  border: 1px solid rgba(240, 180, 41, 0.12);
+  border-radius: 8px;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  border-left: 3px solid var(--accent-gold);
+}
+
+.tool-result-header {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  color: var(--accent-gold);
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.tool-result-data {
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  word-break: break-word;
+}

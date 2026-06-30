@@ -1,0 +1,350 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   J.A.R.V.I.S. Arc Reactor — reactor.css
+   Animated concentric rings, glow effects, and state-based transitions
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Container ─────────────────────────────────────────────────────────── */
+
+#reactor-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 280px;
+}
+
+#reactor-core {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeInScale 1.5s ease-out;
+}
+
+/* ─── Rings ─────────────────────────────────────────────────────────────── */
+
+.reactor-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+
+.ring-outer {
+  width: 220px;
+  height: 220px;
+  border-color: rgba(0, 212, 255, 0.2);
+  border-style: dashed;
+  border-width: 2px;
+  animation: rotateRing 20s linear infinite;
+}
+
+.ring-outer::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--jarvis-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--jarvis-cyan), 0 0 20px var(--jarvis-cyan-glow);
+}
+
+.ring-middle {
+  width: 170px;
+  height: 170px;
+  border-color: rgba(0, 212, 255, 0.3);
+  border-style: dotted;
+  border-width: 2px;
+  animation: rotateRingReverse 15s linear infinite;
+}
+
+.ring-middle::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: var(--jarvis-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--jarvis-cyan);
+}
+
+.ring-middle::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: var(--jarvis-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--jarvis-cyan);
+}
+
+.ring-inner {
+  width: 120px;
+  height: 120px;
+  border: 2px solid rgba(0, 212, 255, 0.35);
+  animation: rotateRing 10s linear infinite;
+}
+
+.ring-inner::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 212, 255, 0.15);
+}
+
+/* ─── Center Core ───────────────────────────────────────────────────────── */
+
+.reactor-center {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 212, 255, 0.8) 0%, rgba(0, 119, 255, 0.4) 50%, transparent 70%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reactor-glow {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, var(--jarvis-cyan) 40%, transparent 70%);
+  box-shadow:
+    0 0 20px var(--jarvis-cyan),
+    0 0 40px var(--jarvis-cyan-glow),
+    0 0 80px rgba(0, 212, 255, 0.15);
+  animation: coreGlow 3s ease-in-out infinite;
+}
+
+.reactor-pulse {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  animation: corePulse 3s ease-in-out infinite;
+}
+
+.reactor-label {
+  position: absolute;
+  bottom: -35px;
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  color: var(--jarvis-cyan);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* ─── Ring Rotation Keyframes ───────────────────────────────────────────── */
+
+@keyframes rotateRing {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes rotateRingReverse {
+  from { transform: rotate(360deg); }
+  to   { transform: rotate(0deg); }
+}
+
+@keyframes coreGlow {
+  0%, 100% {
+    box-shadow:
+      0 0 20px var(--jarvis-cyan),
+      0 0 40px var(--jarvis-cyan-glow),
+      0 0 80px rgba(0, 212, 255, 0.15);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow:
+      0 0 30px var(--jarvis-cyan),
+      0 0 60px var(--jarvis-cyan-glow),
+      0 0 100px rgba(0, 212, 255, 0.25);
+    transform: scale(1.1);
+  }
+}
+
+@keyframes corePulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATE VARIATIONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Listening State (Green) ───────────────────────────────────────────── */
+
+#reactor-core.listening .reactor-glow {
+  background: radial-gradient(circle, #fff 0%, var(--accent-green) 40%, transparent 70%);
+  box-shadow:
+    0 0 20px var(--accent-green),
+    0 0 40px var(--accent-green-glow),
+    0 0 80px rgba(0, 230, 118, 0.15);
+}
+
+#reactor-core.listening .reactor-pulse {
+  border-color: rgba(0, 230, 118, 0.4);
+}
+
+#reactor-core.listening .ring-outer,
+#reactor-core.listening .ring-middle,
+#reactor-core.listening .ring-inner {
+  border-color: rgba(0, 230, 118, 0.3);
+}
+
+#reactor-core.listening .ring-outer::before,
+#reactor-core.listening .ring-middle::before,
+#reactor-core.listening .ring-middle::after {
+  background: var(--accent-green);
+  box-shadow: 0 0 10px var(--accent-green);
+}
+
+#reactor-core.listening .reactor-center {
+  background: radial-gradient(circle, rgba(0, 230, 118, 0.8) 0%, rgba(0, 180, 100, 0.4) 50%, transparent 70%);
+}
+
+#reactor-core.listening .reactor-label {
+  color: var(--accent-green);
+}
+
+/* ─── Thinking State (Gold, faster spin) ────────────────────────────────── */
+
+#reactor-core.thinking .reactor-glow {
+  background: radial-gradient(circle, #fff 0%, var(--accent-gold) 40%, transparent 70%);
+  box-shadow:
+    0 0 20px var(--accent-gold),
+    0 0 40px var(--accent-gold-glow),
+    0 0 80px rgba(240, 180, 41, 0.15);
+  animation: coreGlow 1s ease-in-out infinite;
+}
+
+#reactor-core.thinking .ring-outer {
+  animation-duration: 4s;
+  border-color: rgba(240, 180, 41, 0.35);
+}
+
+#reactor-core.thinking .ring-middle {
+  animation-duration: 3s;
+  border-color: rgba(240, 180, 41, 0.4);
+}
+
+#reactor-core.thinking .ring-inner {
+  animation-duration: 2s;
+  border-color: rgba(240, 180, 41, 0.45);
+}
+
+#reactor-core.thinking .ring-outer::before,
+#reactor-core.thinking .ring-middle::before,
+#reactor-core.thinking .ring-middle::after {
+  background: var(--accent-gold);
+  box-shadow: 0 0 10px var(--accent-gold);
+}
+
+#reactor-core.thinking .reactor-center {
+  background: radial-gradient(circle, rgba(240, 180, 41, 0.8) 0%, rgba(200, 150, 30, 0.4) 50%, transparent 70%);
+}
+
+#reactor-core.thinking .reactor-pulse {
+  border-color: rgba(240, 180, 41, 0.4);
+  animation-duration: 1.5s;
+}
+
+#reactor-core.thinking .reactor-label {
+  color: var(--accent-gold);
+}
+
+/* ─── Speaking State (Bright Cyan, waveform) ────────────────────────────── */
+
+#reactor-core.speaking .reactor-glow {
+  box-shadow:
+    0 0 25px var(--jarvis-cyan),
+    0 0 50px var(--jarvis-cyan-glow),
+    0 0 100px rgba(0, 212, 255, 0.25);
+  animation: coreGlow 1.5s ease-in-out infinite;
+}
+
+#reactor-core.speaking .ring-outer { animation-duration: 8s; }
+#reactor-core.speaking .ring-middle { animation-duration: 6s; }
+#reactor-core.speaking .ring-inner { animation-duration: 4s; }
+
+/* ─── Waveform ──────────────────────────────────────────────────────────── */
+
+.waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 40px;
+  margin-top: var(--space-lg);
+  transition: opacity var(--transition-normal);
+}
+
+.waveform.hidden {
+  opacity: 0;
+  display: flex !important;
+  pointer-events: none;
+}
+
+.wave-bar {
+  width: 4px;
+  height: 8px;
+  background: var(--jarvis-cyan);
+  border-radius: 2px;
+  animation: waveAnimate 1.2s ease-in-out infinite;
+  box-shadow: 0 0 6px var(--jarvis-cyan-glow);
+}
+
+.wave-bar:nth-child(1) { animation-delay: 0s; }
+.wave-bar:nth-child(2) { animation-delay: 0.1s; }
+.wave-bar:nth-child(3) { animation-delay: 0.2s; }
+.wave-bar:nth-child(4) { animation-delay: 0.3s; }
+.wave-bar:nth-child(5) { animation-delay: 0.4s; }
+.wave-bar:nth-child(6) { animation-delay: 0.3s; }
+.wave-bar:nth-child(7) { animation-delay: 0.2s; }
+.wave-bar:nth-child(8) { animation-delay: 0.1s; }
+.wave-bar:nth-child(9) { animation-delay: 0s; }
+
+@keyframes waveAnimate {
+  0%, 100% {
+    height: 8px;
+    opacity: 0.5;
+  }
+  50% {
+    height: 30px;
+    opacity: 1;
+  }
+}
+
+/* Listening state waveform */
+#reactor-core.listening ~ .waveform .wave-bar {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green-glow);
+}
+
+/* Speaking state waveform */
+#reactor-core.speaking ~ .waveform .wave-bar {
+  background: var(--jarvis-cyan);
+  box-shadow: 0 0 6px var(--jarvis-cyan-glow);
+}
