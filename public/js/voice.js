@@ -16,6 +16,8 @@
       this.isSupported = !!SpeechRecognition;
       this.isSpeaking = false;
       this.selectedVoice = null;
+      this.wakeWordMode = true;
+      this.manualTrigger = false;
       this.onResult = null;    // callback(transcript)
       this.onStart = null;     // callback()
       this.onEnd = null;       // callback()
@@ -53,8 +55,8 @@
           }
         }
 
-        if (finalTranscript && this.onResult) {
-          this.onResult(finalTranscript.trim());
+        if (this.onResult) {
+          this.onResult(finalTranscript.trim(), interimTranscript.trim());
         }
       };
 
@@ -69,6 +71,14 @@
       this.recognition.onend = () => {
         this.isListening = false;
         if (this.onEnd) this.onEnd();
+        
+        if (this.wakeWordMode && !this.isSpeaking) {
+          setTimeout(() => {
+            if (this.wakeWordMode && !this.isSpeaking && !this.isListening) {
+              this.startListening();
+            }
+          }, 300);
+        }
       };
     }
 
@@ -145,12 +155,18 @@
 
       utterance.onstart = () => {
         this.isSpeaking = true;
+        if (this.isListening) {
+          this.stopListening();
+        }
         if (this.onSpeakStart) this.onSpeakStart();
       };
 
       utterance.onend = () => {
         this.isSpeaking = false;
         if (this.onSpeakEnd) this.onSpeakEnd();
+        if (this.wakeWordMode && !this.isListening) {
+          this.startListening();
+        }
       };
 
       utterance.onerror = (event) => {

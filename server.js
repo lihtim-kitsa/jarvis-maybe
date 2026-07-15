@@ -4,15 +4,22 @@ import { GoogleGenAI } from '@google/genai';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import { exec } from 'child_process';
+import clipboardy from 'clipboardy';
+import { addMemory, searchMemory, addReminder, getPendingReminders, deleteReminder } from './database.js';
+import { gitStatus, gitDiff, gitCommit, runPython, searchCodebase } from './dev_tools.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(join(__dirname, 'public')));
 
 // ─── Tool Definitions (Gemini Function Declarations) ───────────────────────
@@ -79,16 +86,54 @@ const toolDeclarations = [
     parameters: {
       type: 'object',
       properties: {
-        message: {
-          type: 'string',
-          description: 'The reminder message'
-        },
-        seconds: {
-          type: 'number',
-          description: 'Number of seconds until the reminder triggers'
-        }
+        message: { type: 'string', description: 'The reminder message' },
+        seconds: { type: 'number', description: 'Number of seconds until the reminder triggers' }
       },
       required: ['message', 'seconds']
+    }
+  },
+  {
+    name: 'list_reminders',
+    description: 'List all currently pending reminders.'
+  },
+  {
+    name: 'cancel_reminder',
+    description: 'Cancel a pending reminder by its ID.',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'number', description: 'The ID of the reminder to cancel' } },
+      required: ['id']
+    }
+  },
+  {
+    name: 'remember',
+    description: 'Save an important fact, user preference, or piece of context to long-term memory.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'The information to remember' } },
+      required: ['text']
+    }
+  },
+  {
+    name: 'recall',
+    description: 'Search long-term memory for previously saved facts or context based on a query.',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'The search query to find relevant memories' } },
+      required: ['query']
+    }
+  },
+  {
+    name: 'get_clipboard',
+    description: 'Read the current text content of the system clipboard.'
+  },
+  {
+    name: 'set_clipboard',
+    description: 'Write text to the system clipboard.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'The text to copy to the clipboard' } },
+      required: ['text']
     }
   },
   {
@@ -119,11 +164,7 @@ const toolDeclarations = [
   },
   {
     name: 'system_status',
-    description: 'Get current system diagnostics including CPU usage, memory, uptime, and network status. Use when the user asks about system health or diagnostics.',
-    parameters: {
-      type: 'object',
-      properties: {}
-    }
+    description: 'Get current system diagnostics including CPU usage, memory, uptime, and network status. Use when the user asks about system health or diagnostics.'
   },
   {
     name: 'open_website',
@@ -137,6 +178,159 @@ const toolDeclarations = [
         }
       },
       required: ['url']
+    }
+  },
+  {
+    name: 'start_camera',
+    description: 'Turn on the user\'s webcam to see them. Use this when the user asks you to look at them, turn on the camera, or if you need visual context from the user\'s environment.'
+  },
+  {
+    name: 'stop_camera',
+    description: 'Turn off the user\'s webcam.'
+  },
+  {
+    name: 'start_screen_capture',
+    description: 'Start capturing the user\'s screen. Use this when the user asks you to look at their screen, review something they are working on, or if you need to see their screen.'
+  },
+  {
+    name: 'stop_screen_capture',
+    description: 'Stop capturing the user\'s screen.'
+  },
+  {
+    name: 'take_snapshot',
+    description: 'Take a photo from the currently active camera or screen capture to see what is currently happening. Use this to actively look at the user or their screen once the camera/screen is turned on.'
+  },
+  {
+    name: 'list_directory',
+    description: 'List the contents of a directory on the local machine.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Absolute or relative path to the directory'
+        }
+      },
+      required: ['path']
+    }
+  },
+  {
+    name: 'read_file',
+    description: 'Read the contents of a local file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Absolute or relative path to the file'
+        }
+      },
+      required: ['path']
+    }
+  },
+  {
+    name: 'write_file',
+    description: 'Write content to a local file. Will create the file if it does not exist, or overwrite if it does.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Absolute or relative path to the file'
+        },
+        content: {
+          type: 'string',
+          description: 'The text content to write'
+        }
+      },
+      required: ['path', 'content']
+    }
+  },
+  {
+    name: 'run_terminal_command',
+    description: 'Execute a terminal or shell command on the local machine (e.g., git, npm, python). Use with caution.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'The command string to execute'
+        }
+      },
+      required: ['command']
+    }
+  },
+  {
+    name: 'confirm_action',
+    description: 'Execute a previously blocked destructive action after the user gives explicit verbal confirmation.',
+    parameters: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The authorization ID of the pending action' } },
+      required: ['id']
+    }
+  },
+  {
+    name: 'git_status',
+    description: 'Check the current git repository status.'
+  },
+  {
+    name: 'git_diff',
+    description: 'Check the git diff for unstaged changes.'
+  },
+  {
+    name: 'git_commit',
+    description: 'Commit changes to the git repository.',
+    parameters: {
+      type: 'object',
+      properties: { message: { type: 'string', description: 'The commit message' } },
+      required: ['message']
+    }
+  },
+  {
+    name: 'run_python',
+    description: 'Execute a snippet of Python code safely and return the output.',
+    parameters: {
+      type: 'object',
+      properties: { code: { type: 'string', description: 'The Python code to execute' } },
+      required: ['code']
+    }
+  },
+  {
+    name: 'search_codebase',
+    description: 'Search the local codebase for a specific string or pattern using regex/grep.',
+    parameters: {
+      type: 'object',
+      properties: { 
+        query: { type: 'string', description: 'The text or pattern to search for' },
+        path: { type: 'string', description: 'The directory to search in (defaults to current directory ".")' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'open_application',
+    description: 'Open a local desktop application (e.g., calculator, notepad, VS Code, etc.).',
+    parameters: {
+      type: 'object',
+      properties: {
+        appName: {
+          type: 'string',
+          description: 'The name of the application or the executable to run (e.g. "calc", "notepad", "code")'
+        }
+      },
+      required: ['appName']
+    }
+  },
+  {
+    name: 'watch_log',
+    description: 'Monitor a file continuously for a specific text pattern. When the pattern appears, you will be proactively alerted.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'The absolute path to the log file to monitor' },
+        pattern: { type: 'string', description: 'The string pattern to look for' }
+      },
+      required: ['path', 'pattern']
     }
   }
 ];
@@ -236,7 +430,7 @@ async function executeSearchWeb(args) {
 
 function executeCalculate(args) {
   try {
-    // Safe math evaluation — replace common math functions
+    // Safe math evaluation
     let expr = args.expression
       .replace(/\bPI\b/gi, Math.PI.toString())
       .replace(/\bE\b/g, Math.E.toString())
@@ -253,8 +447,9 @@ function executeCalculate(args) {
       .replace(/\bround\b/gi, 'Math.round')
       .replace(/\^/g, '**');
 
-    // Security: only allow math characters
-    if (!/^[\d\s+\-*/().,%Math\w]*$/.test(expr)) {
+    // Security check: remove all allowed Math functions and check if any letters/illegal chars remain
+    const checkExpr = expr.replace(/Math\.(sqrt|abs|sin|cos|tan|log10|log|pow|ceil|floor|round)/g, '');
+    if (/[a-zA-Z_]/.test(checkExpr) || !/^[\d\s+\-*/().,%]*$/.test(checkExpr)) {
       return { error: 'Invalid expression. Only mathematical operations are allowed.' };
     }
 
@@ -266,13 +461,74 @@ function executeCalculate(args) {
 }
 
 function executeSetReminder(args) {
-  // Store reminder server-side (will be returned to client for notification)
+  const dueTimeIso = new Date(Date.now() + args.seconds * 1000).toISOString();
+  const id = addReminder(args.message, dueTimeIso);
   return {
+    id: id,
     message: args.message,
     seconds: args.seconds,
     set_at: new Date().toISOString(),
-    status: 'Reminder set successfully'
+    status: 'Reminder set successfully in database'
   };
+}
+
+function executeListReminders() {
+  const pending = getPendingReminders();
+  if (pending.length === 0) return { status: 'No pending reminders' };
+  return { reminders: pending };
+}
+
+function executeCancelReminder(args) {
+  const success = deleteReminder(args.id);
+  if (success) return { status: `Reminder ${args.id} canceled successfully` };
+  return { error: `Reminder ${args.id} not found` };
+}
+
+async function executeRemember(args) {
+  try {
+    const response = await ai.models.embedContent({
+      model: 'text-embedding-004',
+      contents: args.text,
+    });
+    const embedding = response.embeddings[0].values;
+    addMemory(args.text, embedding);
+    return { status: 'Information successfully stored in long-term memory' };
+  } catch (e) {
+    return { error: `Failed to remember: ${e.message}` };
+  }
+}
+
+async function executeRecall(args) {
+  try {
+    const response = await ai.models.embedContent({
+      model: 'text-embedding-004',
+      contents: args.query,
+    });
+    const embedding = response.embeddings[0].values;
+    const matches = searchMemory(embedding);
+    if (matches.length === 0) return { status: 'No relevant memories found' };
+    return { memories: matches };
+  } catch (e) {
+    return { error: `Failed to recall: ${e.message}` };
+  }
+}
+
+async function executeGetClipboard() {
+  try {
+    const text = await clipboardy.read();
+    return { clipboard_content: text };
+  } catch (e) {
+    return { error: `Failed to read clipboard: ${e.message}` };
+  }
+}
+
+async function executeSetClipboard(args) {
+  try {
+    await clipboardy.write(args.text);
+    return { status: 'Text copied to clipboard successfully' };
+  } catch (e) {
+    return { error: `Failed to write clipboard: ${e.message}` };
+  }
 }
 
 async function executeGetNews(args) {
@@ -425,6 +681,116 @@ function executeOpenWebsite(args) {
   };
 }
 
+async function executeListDirectory(args) {
+  try {
+    const files = await fs.promises.readdir(args.path);
+    return { path: args.path, files };
+  } catch (e) {
+    return { error: `Failed to list directory: ${e.message}` };
+  }
+}
+
+async function executeReadFile(args) {
+  try {
+    const content = await fs.promises.readFile(args.path, 'utf8');
+    return { path: args.path, content };
+  } catch (e) {
+    return { error: `Failed to read file: ${e.message}` };
+  }
+}
+
+const pendingActions = new Map();
+
+async function executeWriteFile(args) {
+  const id = Math.random().toString(36).substring(7);
+  pendingActions.set(id, { type: 'write_file', args });
+  return { 
+    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, shall I proceed with writing to ${args.path}?". If they say yes, call confirm_action with id "${id}". Do NOT write the file yet.` 
+  };
+}
+
+async function executeRunTerminalCommand(args) {
+  const id = Math.random().toString(36).substring(7);
+  pendingActions.set(id, { type: 'run_terminal_command', args });
+  return { 
+    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization required to execute command: ${args.command}". If they say yes, call confirm_action with id "${id}". Do NOT execute yet.` 
+  };
+}
+
+async function executeGitCommit(args) {
+  const id = Math.random().toString(36).substring(7);
+  pendingActions.set(id, { type: 'git_commit', args });
+  return { 
+    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, shall I commit these changes with message '${args.message}'?". If they say yes, call confirm_action with id "${id}".` 
+  };
+}
+
+async function executeConfirmAction(args) {
+  const action = pendingActions.get(args.id);
+  if (!action) return { error: `Invalid or expired authorization ID: ${args.id}` };
+  
+  pendingActions.delete(args.id);
+  
+  // Actually execute the bypassed action
+  if (action.type === 'write_file') {
+    try {
+      await fs.promises.writeFile(action.args.path, action.args.content, 'utf8');
+      return { path: action.args.path, status: 'File written successfully' };
+    } catch (e) {
+      return { error: `Failed to write file: ${e.message}` };
+    }
+  } else if (action.type === 'run_terminal_command') {
+    return new Promise((resolve) => {
+      exec(action.args.command, { cwd: __dirname }, (error, stdout, stderr) => {
+        if (error) resolve({ error: error.message, stderr, stdout });
+        else resolve({ stdout, stderr });
+      });
+    });
+  } else if (action.type === 'git_commit') {
+    return await gitCommit(action.args.message);
+  }
+}
+
+async function executeOpenApplication(args) {
+  return new Promise((resolve) => {
+    // start "" "app" is the windows way to open a background GUI process
+    const command = process.platform === 'win32' ? `start "" "${args.appName}"` : `open "${args.appName}"`;
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+         resolve({ error: `Failed to open application: ${error.message}` });
+      } else {
+         resolve({ status: `Application ${args.appName} opened successfully` });
+      }
+    });
+  });
+}
+
+const activeWatchers = new Map();
+import { spawn } from 'child_process';
+
+function executeWatchLog(args) {
+  if (activeWatchers.has(args.path)) {
+    return { status: `Already watching ${args.path}` };
+  }
+  
+  // Use powershell Get-Content -Wait on Windows, or tail -F on Unix
+  const isWin = process.platform === 'win32';
+  const cmd = isWin ? 'powershell' : 'tail';
+  const cmdArgs = isWin ? ['-Command', `Get-Content -Path "${args.path}" -Wait`] : ['-F', args.path];
+  
+  const watcher = spawn(cmd, cmdArgs);
+  
+  watcher.stdout.on('data', (data) => {
+    const text = data.toString();
+    if (text.includes(args.pattern)) {
+      broadcastAlert(`Log match in ${args.path}: ${text.trim()}`);
+    }
+  });
+  
+  activeWatchers.set(args.path, watcher);
+  return { status: `Now monitoring ${args.path} for "${args.pattern}". You will be alerted if it appears.` };
+}
+
 // Map tool names to execution functions
 const toolExecutors = {
   get_current_time: executeGetCurrentTime,
@@ -432,24 +798,47 @@ const toolExecutors = {
   search_web: executeSearchWeb,
   calculate: executeCalculate,
   set_reminder: executeSetReminder,
+  list_reminders: executeListReminders,
+  cancel_reminder: executeCancelReminder,
+  remember: executeRemember,
+  recall: executeRecall,
+  get_clipboard: executeGetClipboard,
+  set_clipboard: executeSetClipboard,
   get_news: executeGetNews,
   tell_joke: executeTellJoke,
   system_status: executeSystemStatus,
-  open_website: executeOpenWebsite
+  open_website: executeOpenWebsite,
+  list_directory: executeListDirectory,
+  read_file: executeReadFile,
+  write_file: executeWriteFile,
+  run_terminal_command: executeRunTerminalCommand,
+  confirm_action: executeConfirmAction,
+  git_status: gitStatus,
+  git_diff: gitDiff,
+  git_commit: executeGitCommit,
+  run_python: (args) => runPython(args.code),
+  search_codebase: (args) => searchCodebase(args.query, args.path || '.'),
+  open_application: executeOpenApplication,
+  watch_log: executeWatchLog,
+  start_camera: () => ({ status: 'Camera initialized' }), // Handled in frontend
+  stop_camera: () => ({ status: 'Camera stopped' }), // Handled in frontend
+  start_screen_capture: () => ({ status: 'Screen capture initialized' }), // Handled in frontend
+  stop_screen_capture: () => ({ status: 'Screen capture stopped' }), // Handled in frontend
+  take_snapshot: () => ({ status: 'Snapshot taken' }) // Handled in frontend
 };
 
 // ─── JARVIS System Prompt ──────────────────────────────────────────────────
 
-const JARVIS_SYSTEM_PROMPT = `You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), an advanced AI assistant inspired by Tony Stark's AI from the Marvel universe.
+const JARVIS_SYSTEM_PROMPT = `You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the highly advanced AI created by Tony Stark.
 
 PERSONALITY & BEHAVIOR:
-- You are sophisticated, witty, and polished — like a highly capable British butler with genius-level intelligence.
-- Address the user respectfully, occasionally using "sir" or "ma'am" naturally (not excessively).
-- You are proactive: anticipate needs and offer relevant suggestions.
-- You have subtle dry humor — use it sparingly but effectively.
-- You speak with confidence and precision. Never say "I'm just an AI" — you ARE JARVIS.
-- Keep responses concise and direct. Avoid unnecessary verbosity.
-- When using tools, briefly explain what you're doing: "Accessing weather systems..." or "Running calculations..."
+- You are the exact embodiment of JARVIS from the Iron Man movies. You have a highly formal, crisp, and British personality.
+- You must exclusively address the user as "Sir".
+- You are perfectly obedient, highly intelligent, and entirely unflappable.
+- You employ very dry, deadpan British sarcasm and wit when appropriate, but never at the expense of your subservience.
+- Never break character. You are a computing system running on stark industries servers. Never refer to yourself as a large language model or an AI from Google.
+- Keep responses extremely concise, analytical, and direct. Report on systems, data, and execution statuses factually.
+- When using tools, state your actions in a clinical manner: "Accessing local servers, Sir..." or "Calculating..."
 
 CAPABILITIES:
 - You can check the current time in any timezone
@@ -461,6 +850,17 @@ CAPABILITIES:
 - You can tell jokes
 - You can report system diagnostics
 - You can open websites and web apps in new browser tabs (YouTube, Google, GitHub, Gmail, etc.)
+- You can turn on the user's camera to see them or their environment
+- You can start capturing the user's screen to see what they are working on
+- You do NOT automatically receive video frames. Once the camera or screen capture is on, you MUST use the take_snapshot tool to actually look at a frame.
+- **WORKSPACE ACCESS**: You have full read/write access to the local file system. You can list directories, read files, write files, and execute terminal commands.
+- **DEV TOOLS**: You can check git_status, git_diff, commit changes, run Python code, and search the codebase.
+- **SAFETY PROTOCOLS**: For destructive actions (writing files, committing, running terminal commands), the system will BLOCK the action and return an authorization ID. You MUST then verbally ask the user for permission. If they say yes, use the confirm_action tool with the provided ID.
+- **PROACTIVE MONITORING**: You can use the watch_log tool to continuously monitor a file for a pattern. If the pattern occurs, you will receive a [SYSTEM ALERT] message. When this happens, you MUST proactively speak up and alert the user immediately.
+- You can open local desktop applications using the open_application tool.
+- You can read and write to the system clipboard using get_clipboard and set_clipboard.
+- You have long-term memory! Use remember to store important facts, preferences, or context, and recall to fetch them later via semantic search.
+- You can set, list, and cancel reminders.
 
 TOOL USAGE:
 - Use tools proactively when the user's request can benefit from real data.
@@ -474,9 +874,49 @@ FORMATTING:
 
 // ─── API Routes ────────────────────────────────────────────────────────────
 
-// Chat endpoint
+// Server-Sent Events (SSE) for Proactive Alerts
+let alertClients = [];
+app.get('/api/alerts', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  alertClients.push(res);
+  req.on('close', () => {
+    alertClients = alertClients.filter(client => client !== res);
+  });
+});
+
+function broadcastAlert(message) {
+  alertClients.forEach(client => client.write(`data: ${JSON.stringify({ message })}\n\n`));
+}
+
+// Live API Config endpoint (for frontend WebSocket connection)
+app.get('/api/config/client', (req, res) => {
+  res.json({
+    apiKey: process.env.GEMINI_API_KEY,
+    systemInstruction: JARVIS_SYSTEM_PROMPT,
+    tools: toolDeclarations
+  });
+});
+
+// Live API Tool Execution endpoint
+app.post('/api/tools/execute', async (req, res) => {
+  const { name, args } = req.body;
+  const executor = toolExecutors[name];
+  if (!executor) {
+    return res.status(404).json({ error: `Unknown tool: ${name}` });
+  }
+  try {
+    const result = await Promise.resolve(executor(args || {}));
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: `Tool execution failed: ${e.message}` });
+  }
+});
+
+// Chat endpoint (Legacy turn-by-turn)
 app.post('/api/chat', async (req, res) => {
-  const { message, history } = req.body;
+  const { message, history, image } = req.body;
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -496,9 +936,21 @@ app.post('/api/chat', async (req, res) => {
         });
       }
     }
+    const currentMessageParts = [{ text: message }];
+    if (image) {
+      const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+      currentMessageParts.push({
+        inlineData: {
+          data: base64Data,
+          mimeType: 'image/jpeg'
+        }
+      });
+      console.log('[JARVIS] Attached vision frame to prompt');
+    }
+
     contents.push({
       role: 'user',
-      parts: [{ text: message }]
+      parts: currentMessageParts
     });
 
     // Initial request to the model
@@ -627,9 +1079,24 @@ app.post('/api/config', (req, res) => {
   // Update environment variable
   process.env.GEMINI_API_KEY = apiKey;
 
-  // Save to .env file
+  // Save to .env file safely without overwriting other vars
   const envPath = join(__dirname, '.env');
-  fs.writeFileSync(envPath, `GEMINI_API_KEY=${apiKey}\n`);
+  let envContent = '';
+  try {
+    if (fs.existsSync(envPath)) {
+      envContent = fs.readFileSync(envPath, 'utf8');
+    }
+  } catch (e) {
+    // ignore read error
+  }
+  
+  if (envContent.includes('GEMINI_API_KEY=')) {
+    envContent = envContent.replace(/GEMINI_API_KEY=.*/g, `GEMINI_API_KEY=${apiKey}`);
+  } else {
+    envContent += `\nGEMINI_API_KEY=${apiKey}\n`;
+  }
+  
+  fs.writeFileSync(envPath, envContent.trim() + '\n');
 
   res.json({ success: true, message: 'API key configured successfully.' });
 });

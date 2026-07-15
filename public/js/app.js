@@ -1,15 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   J.A.R.V.I.S. Main Application — app.js
-   Orchestrator that wires together Voice, Chat, Agent, and Reactor modules
+   J.A.R.V.I.S. Main Application — app.js (Live API Edition)
+   Orchestrator that wires together Live API, Chat, and Reactor modules
    ═══════════════════════════════════════════════════════════════════════════ */
 
 (function () {
   'use strict';
 
-  // Module references (set by IIFE pattern in other scripts)
-  const voice = window.JarvisVoice;
   const chat = window.JarvisChat;
-  const agent = window.JarvisAgent;
+  const agent = window.JarvisAgent; // Used for API Key & Health checks
   const reactor = window.JarvisReactor;
 
   // DOM references
@@ -22,226 +20,132 @@
   const clockEl = document.getElementById('hud-clock');
   const dateEl = document.getElementById('hud-date');
   const activityLog = document.getElementById('activity-log');
+  const cameraBtn = document.getElementById('camera-button');
+  const screenBtn = document.getElementById('screen-button');
 
   let isInitialized = false;
-  let lastError = null;  // Stores the most recent error message from the agent
+  let visionInterval = null;
 
-  // ─── Clock ─────────────────────────────────────────────────────────────
+  // ─── Clock & Logging ───────────────────────────────────────────────────
 
   function updateClock() {
     const now = new Date();
-    if (clockEl) {
-      clockEl.textContent = now.toLocaleTimeString('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      });
-    }
-    if (dateEl) {
-      dateEl.textContent = now.toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric'
-      }).toUpperCase();
-    }
+    if (clockEl) clockEl.textContent = now.toLocaleTimeString('en-US', { hour12: false });
+    if (dateEl) dateEl.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
   }
-
-  // ─── Activity Log ──────────────────────────────────────────────────────
 
   function logActivity(text, type = '') {
     if (!activityLog) return;
-    const time = new Date().toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    });
-
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false });
     const entry = document.createElement('div');
     entry.className = 'activity-entry';
-    entry.innerHTML = `
-      <span class="activity-time">${time}</span>
-      <span class="activity-text ${type}">${text}</span>
-    `;
-
+    entry.innerHTML = `<span class="activity-time">${time}</span><span class="activity-text ${type}">${text}</span>`;
     activityLog.appendChild(entry);
     activityLog.scrollTop = activityLog.scrollHeight;
-
-    // Keep max 50 entries
-    while (activityLog.children.length > 50) {
-      activityLog.removeChild(activityLog.firstChild);
-    }
+    while (activityLog.children.length > 50) activityLog.removeChild(activityLog.firstChild);
   }
 
-  // ─── Send Message Flow ─────────────────────────────────────────────────
+  // ─── Send Message ──────────────────────────────────────────────────────
 
   async function handleSendMessage(text) {
-    if (!text.trim() || agent.isProcessing) return;
-    lastError = null;  // Reset error state
-
-    // Add user message to chat
+    if (!text.trim()) return;
     chat.addUserMessage(text);
     logActivity(`User: "${text.substring(0, 40)}${text.length > 40 ? '...' : ''}"`, '');
 
-    // Show thinking state
-    reactor.setState('thinking');
-    chat.showTyping();
-
-    // Get conversation history (last 10 messages for context)
-    const history = chat.getHistory().slice(-10);
-
-    // Send to agent
-    const response = await agent.sendMessage(text, history);
-
-    // Hide typing
-    chat.hideTyping();
-
-    if (response) {
-      // Add JARVIS response to chat
-      chat.addJarvisMessage(response.response, response.toolsUsed || []);
-      logActivity('JARVIS responded', 'success');
-
-      // Speak the response
-      reactor.setState('speaking');
-      voice.speak(response.response);
-
-      // Handle reminders
-      if (response.reminder) {
-        const reminder = response.reminder;
-        setTimeout(() => {
-          const msg = `Reminder: ${reminder.message}`;
-          chat.addJarvisMessage(msg, []);
-          voice.speak(msg);
-          logActivity(`Reminder triggered: ${reminder.message}`, 'tool');
-        }, (reminder.seconds || 60) * 1000);
-        logActivity(`Reminder set for ${reminder.seconds}s`, 'tool');
-      }
-
-      // Handle URLs to open in new tabs
-      if (response.urlsToOpen) {
-        for (const item of response.urlsToOpen) {
-          try {
-            window.open(item.url, '_blank', 'noopener,noreferrer');
-            logActivity(`Opened: ${item.name || item.url}`, 'success');
-          } catch (e) {
-            logActivity(`Failed to open: ${item.url}`, 'error');
-          }
-        }
-      }
+    const live = window.JarvisLive;
+    if (live && live.isConnected) {
+       live.sendClientContent(text);
     } else {
-      // Use the actual error message from the server if available
-      const errorMsg = lastError || "I'm experiencing a temporary disruption, sir. Please try again.";
-      chat.addJarvisMessage(errorMsg);
-      logActivity('Response error', 'error');
-      reactor.setState('idle');
+       logActivity('Please connect to the Live API by clicking the microphone.', 'error');
     }
   }
 
-  // ─── Voice Callbacks ───────────────────────────────────────────────────
+  // ─── Vision Streaming ──────────────────────────────────────────────────
 
-  function setupVoice() {
-    if (!voice) return;
-
-    voice.onStart = () => {
-      reactor.setState('listening');
-      micBtn?.classList.add('active');
-      logActivity('Listening...', '');
-    };
-
-    voice.onEnd = () => {
-      micBtn?.classList.remove('active');
-      if (reactor.getState() === 'listening') {
-        reactor.setState('idle');
-      }
-    };
-
-    voice.onResult = (transcript) => {
-      // Check for wake word
-      const lower = transcript.toLowerCase();
-      if (lower.startsWith('hey jarvis') || lower.startsWith('jarvis')) {
-        // Strip wake word from the command
-        let command = transcript.replace(/^(hey\s+)?jarvis[,.\s]*/i, '').trim();
-        if (command) {
-          handleSendMessage(command);
-        }
-      } else {
-        handleSendMessage(transcript);
-      }
-    };
-
-    voice.onSpeakStart = () => {
-      reactor.setState('speaking');
-    };
-
-    voice.onSpeakEnd = () => {
-      reactor.setState('idle');
-    };
-  }
-
-  // ─── Agent Callbacks ───────────────────────────────────────────────────
-
-  function setupAgent() {
-    if (!agent) return;
-
-    agent.onError = (errorMessage) => {
-      lastError = errorMessage;
-      logActivity(`Error: ${errorMessage.substring(0, 60)}`, 'error');
-    };
-
-    agent.onToolUse = (toolName, args) => {
-      const toolMap = {
-        get_current_time: 'time',
-        get_weather: 'weather',
-        search_web: 'search',
-        calculate: 'calculate',
-        set_reminder: 'reminder',
-        get_news: 'news',
-        tell_joke: 'joke',
-        system_status: 'system',
-        open_website: 'website'
-      };
-
-      const toolKey = toolMap[toolName];
-      logActivity(`Tool: ${toolName.replace(/_/g, ' ')}`, 'tool');
-
-      // Flash the capability item
-      if (toolKey) {
-        const capItem = document.querySelector(`.capability-item[data-tool="${toolKey}"]`);
-        if (capItem) {
-          const status = capItem.querySelector('.cap-status');
-          if (status) {
-            status.textContent = 'ACTIVE';
-            status.classList.remove('online');
-            status.classList.add('active');
-            setTimeout(() => {
-              status.textContent = 'READY';
-              status.classList.remove('active');
-              status.classList.add('online');
-            }, 3000);
-          }
-        }
-      }
-    };
+  function startVisionInterval() {
+    // Intentionally empty. Snapshots are now taken on-demand via the take_snapshot tool.
   }
 
   // ─── Event Listeners ───────────────────────────────────────────────────
 
   function setupEventListeners() {
-    // Mic button
+    // Microphone (Live API Toggle)
     if (micBtn) {
-      micBtn.addEventListener('click', () => {
-        if (voice.isListening) {
-          voice.stopListening();
+      micBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const live = window.JarvisLive;
+        if (!live) return;
+        if (live.isConnected) {
+           logActivity('Disconnecting from Live API...', '');
+           live.disconnect();
         } else {
-          // Stop speaking if JARVIS is talking
-          voice.stopSpeaking();
-          voice.startListening();
+           logActivity('Connecting to Live API...', '');
+           await live.connect();
+        }
+      });
+    }
+    
+    // Vision
+    if (cameraBtn) {
+      cameraBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const vision = window.JarvisVision;
+        if (!vision) return;
+        if (vision.isActive && !vision.isScreen) {
+          vision.stop();
+          cameraBtn.classList.remove('active');
+          if (visionInterval) clearInterval(visionInterval);
+          logActivity('Camera disabled', '');
+        } else {
+          cameraBtn.classList.add('active');
+          screenBtn?.classList.remove('active');
+          logActivity('Initializing camera...', '');
+          const success = await vision.startCamera();
+          if (!success) {
+            cameraBtn.classList.remove('active');
+            logActivity('Camera initialization failed', 'error');
+          } else {
+            startVisionInterval();
+          }
         }
       });
     }
 
-    // Text input
+    if (screenBtn) {
+      screenBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const vision = window.JarvisVision;
+        if (!vision) return;
+        if (vision.isActive && vision.isScreen) {
+          vision.stop();
+          screenBtn.classList.remove('active');
+          if (visionInterval) clearInterval(visionInterval);
+          logActivity('Screen sharing disabled', '');
+        } else {
+          screenBtn.classList.add('active');
+          cameraBtn?.classList.remove('active');
+          logActivity('Initializing screen share...', '');
+          const success = await vision.startScreen();
+          if (!success) {
+            screenBtn.classList.remove('active');
+            logActivity('Screen share failed or cancelled', 'error');
+          } else {
+            startVisionInterval();
+          }
+        }
+      });
+    }
+    
+    if (window.JarvisVision) {
+      window.JarvisVision.onStop = () => {
+        cameraBtn?.classList.remove('active');
+        screenBtn?.classList.remove('active');
+        if (visionInterval) clearInterval(visionInterval);
+        logActivity('Vision feed disconnected', '');
+      };
+    }
+
+    // Chat
     if (chatInput) {
       chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -255,7 +159,6 @@
       });
     }
 
-    // Send button
     if (sendBtn) {
       sendBtn.addEventListener('click', () => {
         const text = chatInput?.value.trim();
@@ -271,12 +174,9 @@
       apiKeySubmit.addEventListener('click', async () => {
         const key = apiKeyInput?.value.trim();
         if (!key) return;
-
         apiKeySubmit.textContent = 'INITIALIZING...';
         apiKeySubmit.disabled = true;
-
         const result = await agent.saveApiKey(key);
-
         if (result.success) {
           apiKeyModal?.classList.add('hidden');
           initializeJarvis();
@@ -286,7 +186,6 @@
           alert('Failed to save API key. Please try again.');
         }
       });
-
       apiKeyInput?.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') apiKeySubmit.click();
       });
@@ -301,62 +200,42 @@
 
     logActivity('J.A.R.V.I.S. online', 'success');
     logActivity('All systems operational', 'success');
-
     reactor.setState('idle');
 
-    // Send initial greeting
-    setTimeout(async () => {
-      reactor.setState('thinking');
-      chat.showTyping();
-
-      const greeting = await agent.sendMessage(
-        "The user just opened the JARVIS interface. Greet them briefly and let them know you're ready. Be characteristically JARVIS — witty and concise.",
-        []
-      );
-
-      chat.hideTyping();
-
-      if (greeting) {
-        chat.addJarvisMessage(greeting.response, []);
-        reactor.setState('speaking');
-        voice.speak(greeting.response);
-      } else {
-        const fallback = "Good day. All systems are operational and at your disposal.";
-        chat.addJarvisMessage(fallback, []);
-        reactor.setState('speaking');
-        voice.speak(fallback);
-      }
-    }, 1500);
+    const live = window.JarvisLive;
+    if (live) {
+      live.onStateChange = (connected) => {
+         if (connected) {
+            logActivity('Live WebSocket Connected', 'success');
+            if (micBtn) micBtn.classList.add('active');
+            reactor.setState('listening'); // Use listening/speaking state conceptually
+         } else {
+            logActivity('Live WebSocket Disconnected', 'error');
+            if (micBtn) micBtn.classList.remove('active');
+            reactor.setState('idle');
+         }
+      };
+      
+      // Attempt immediate connection
+      live.connect();
+    }
   }
 
-  // ─── Boot Sequence ─────────────────────────────────────────────────────
-
   async function boot() {
-    // Start clock
     updateClock();
     setInterval(updateClock, 1000);
-
-    // Setup modules
-    setupVoice();
-    setupAgent();
     setupEventListeners();
-
     logActivity('System boot sequence', '');
 
-    // Check if API key is configured
     const health = await agent.checkHealth();
-
     if (health.hasApiKey) {
-      // API key already configured — hide modal, start JARVIS
       apiKeyModal?.classList.add('hidden');
       initializeJarvis();
     } else {
-      // Show API key modal
       logActivity('Awaiting API key configuration...', '');
     }
   }
 
-  // Start when DOM is ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);
   } else {

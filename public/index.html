@@ -1,22 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="J.A.R.V.I.S. — Just A Rather Very Intelligent System. An Agentic AI Assistant powered by Gemini.">
+  <meta name="description"
+    content="J.A.R.V.I.S. — Just A Rather Very Intelligent System. An Agentic AI Assistant powered by Gemini.">
   <title>J.A.R.V.I.S. — AI Assistant</title>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet">
 
   <!-- Stylesheets -->
-  <link rel="stylesheet" href="/css/index.css">
-  <link rel="stylesheet" href="/css/reactor.css">
-  <link rel="stylesheet" href="/css/hud.css">
-  <link rel="stylesheet" href="/css/chat.css">
+  <link rel="stylesheet" href="css/index.css">
+  <link rel="stylesheet" href="css/reactor.css">
+  <link rel="stylesheet" href="css/hud.css">
+  <link rel="stylesheet" href="css/chat.css">
 </head>
+
 <body>
   <!-- Background Particle Canvas -->
   <canvas id="particle-canvas"></canvas>
@@ -165,20 +170,34 @@
     <!-- Input Area (Bottom) -->
     <footer id="input-area">
       <div class="input-container">
-        <button id="mic-button" class="mic-button" title="Voice Command (Hold to speak)">
+        <button id="camera-button" class="vision-toggle-btn" title="Toggle Camera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+            <circle cx="12" cy="13" r="4" />
+          </svg>
+        </button>
+        <button id="screen-button" class="vision-toggle-btn" title="Toggle Screen Share">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+            <line x1="8" y1="21" x2="16" y2="21" />
+            <line x1="12" y1="17" x2="12" y2="21" />
+          </svg>
+        </button>
+        <button id="mic-button" class="mic-button" title="Voice Command">
           <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-            <line x1="12" y1="19" x2="12" y2="23"/>
-            <line x1="8" y1="23" x2="16" y2="23"/>
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
           </svg>
           <div class="mic-pulse"></div>
         </button>
-        <input type="text" id="chat-input" class="chat-input" placeholder="Speak or type a command..." autocomplete="off">
+        <input type="text" id="chat-input" class="chat-input" placeholder="Speak or type a command..."
+          autocomplete="off">
         <button id="send-button" class="send-button" title="Send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="22" y1="2" x2="11" y2="13"/>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
           </svg>
         </button>
       </div>
@@ -200,7 +219,8 @@
       </div>
       <h1 class="modal-title">J.A.R.V.I.S.</h1>
       <p class="modal-subtitle">Just A Rather Very Intelligent System</p>
-      <p class="modal-desc">Enter your Gemini API key to initialize the system. You can get a free key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+      <p class="modal-desc">Enter your Gemini API key to initialize the system. You can get a free key from <a
+          href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.</p>
       <div class="modal-input-group">
         <input type="password" id="api-key-input" class="modal-input" placeholder="Enter Gemini API Key...">
         <button id="api-key-submit" class="modal-submit">INITIALIZE</button>
@@ -209,12 +229,27 @@
     </div>
   </div>
 
-  <!-- Scripts -->
-  <script src="/js/particles.js"></script>
-  <script src="/js/reactor.js"></script>
-  <script src="/js/voice.js"></script>
-  <script src="/js/chat.js"></script>
-  <script src="/js/agent.js"></script>
-  <script src="/js/app.js"></script>
+  <!-- Vision Overlay -->
+  <div id="vision-overlay" class="vision-overlay hidden">
+    <div class="vision-header">
+      <span class="vision-title">VISION FEED</span>
+      <button id="vision-close-btn" class="vision-close-btn">&times;</button>
+    </div>
+    <video id="vision-video" autoplay playsinline muted></video>
+    <div id="vision-snapshot-container" class="hidden">
+      <img id="vision-snapshot" alt="Captured Frame" />
+    </div>
+  </div>
+
+  <!-- Scripts (Order matters) -->
+  <script src="js/particles.js"></script>
+  <script src="js/reactor.js"></script>
+  <script src="js/voice.js"></script>
+  <script src="js/live.js"></script>
+  <script src="js/vision.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/agent.js"></script>
+  <script src="js/app.js"></script>
 </body>
+
 </html>

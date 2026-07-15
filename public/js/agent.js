@@ -15,15 +15,18 @@
       this.onReminder = null;     // callback(reminder)
     }
 
-    async sendMessage(message, history = []) {
+    async sendMessage(message, history = [], image = null) {
       if (this.isProcessing) return null;
       this.isProcessing = true;
 
       try {
+        const payload = { message, history };
+        if (image) payload.image = image;
+
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, history })
+          body: JSON.stringify(payload)
         });
 
         if (!response.ok) {

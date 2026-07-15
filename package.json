@@ -3,17 +3,30 @@
   "version": "1.0.0",
   "description": "J.A.R.V.I.S. — Agentic AI Assistant powered by Gemini",
   "type": "module",
-  "main": "server.js",
+  "main": "main.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "electron-start": "electron ."
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
+    "better-sqlite3": "^12.11.1",
+    "clipboardy": "^5.3.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2"
   },
-  "keywords": ["jarvis", "ai", "assistant", "gemini", "voice"],
+  "keywords": [
+    "jarvis",
+    "ai",
+    "assistant",
+    "gemini",
+    "voice"
+  ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "electron": "^43.1.1"
+  }
 }

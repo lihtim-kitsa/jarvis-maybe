@@ -406,6 +406,120 @@
   opacity: 1;
   animation: corePulse 1.5s ease-in-out infinite;
 }
+/* ─── Vision Overlay ───────────────────────────────────────────────────────── */
+.vision-overlay {
+  position: absolute;
+  bottom: 100px;
+  right: var(--space-lg);
+  width: 480px;
+  background: rgba(5, 10, 15, 0.95);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 3px solid var(--jarvis-cyan);
+  border-radius: 0;
+  z-index: var(--z-panel);
+  overflow: hidden;
+  box-shadow: 10px 10px 0px rgba(0, 212, 255, 0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+.vision-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(0, 212, 255, 0.15);
+  border-bottom: 3px solid var(--jarvis-cyan);
+}
+
+.vision-title {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--jarvis-cyan);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.vision-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.vision-close-btn:hover {
+  color: var(--accent-red);
+}
+
+#vision-video {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+#vision-snapshot-container {
+  position: absolute;
+  top: 25px; /* below header */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#vision-snapshot {
+  max-width: 100%;
+  max-height: 100%;
+  border: 2px solid var(--jarvis-cyan);
+  animation: flash 0.5s ease-out;
+}
+
+@keyframes flash {
+  0% { opacity: 0; transform: scale(1.1); box-shadow: 0 0 50px white; }
+  10% { opacity: 1; transform: scale(1); box-shadow: 0 0 20px var(--jarvis-cyan); }
+  100% { opacity: 1; }
+}
+
+.vision-toggle-btn {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  transition: all var(--transition-normal);
+  flex-shrink: 0;
+  cursor: pointer;
+  margin-right: 10px;
+}
+
+.vision-toggle-btn:hover {
+  color: var(--jarvis-cyan);
+  border-color: var(--jarvis-cyan);
+}
+
+.vision-toggle-btn.active {
+  background: rgba(0, 212, 255, 0.15);
+  border-color: var(--jarvis-cyan);
+  color: var(--jarvis-cyan);
+  box-shadow: 0 0 10px var(--jarvis-cyan-glow);
+}
+
+.vision-toggle-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
 
 .chat-input {
   flex: 1;
