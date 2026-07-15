@@ -644,86 +644,91 @@ async function executeSystemStatus() {
   };
 }
 
-function executeOpenWebsite(args) {
-  const input = (args.url || '').trim();
-  if (!input) return { error: 'No URL or website name provided.' };
+async function executeOpenWebsite(args) {
+  return new Promise((resolve) => {
+    const input = (args.url || '').trim();
+    if (!input) return resolve({ error: 'No URL or website name provided.' });
 
-  // Common site name → URL mapping
-  const siteMap = {
-    youtube:    'https://www.youtube.com',
-    google:     'https://www.google.com',
-    gmail:      'https://mail.google.com',
-    github:     'https://github.com',
-    twitter:    'https://twitter.com',
-    x:          'https://x.com',
-    reddit:     'https://www.reddit.com',
-    facebook:   'https://www.facebook.com',
-    instagram:  'https://www.instagram.com',
-    linkedin:   'https://www.linkedin.com',
-    netflix:    'https://www.netflix.com',
-    spotify:    'https://open.spotify.com',
-    amazon:     'https://www.amazon.com',
-    wikipedia:  'https://en.wikipedia.org',
-    stackoverflow: 'https://stackoverflow.com',
-    'stack overflow': 'https://stackoverflow.com',
-    chatgpt:    'https://chat.openai.com',
-    whatsapp:   'https://web.whatsapp.com',
-    discord:    'https://discord.com',
-    twitch:     'https://www.twitch.tv',
-    pinterest:  'https://www.pinterest.com',
-    notion:     'https://www.notion.so',
-    figma:      'https://www.figma.com',
-    canva:      'https://www.canva.com',
-    drive:      'https://drive.google.com',
-    'google drive': 'https://drive.google.com',
-    maps:       'https://maps.google.com',
-    'google maps': 'https://maps.google.com',
-    calendar:   'https://calendar.google.com',
-    'google calendar': 'https://calendar.google.com',
-    docs:       'https://docs.google.com',
-    'google docs': 'https://docs.google.com',
-    sheets:     'https://sheets.google.com',
-    'google sheets': 'https://sheets.google.com',
-    slides:     'https://slides.google.com',
-    'google slides': 'https://slides.google.com',
-    medium:     'https://medium.com',
-    hackernews: 'https://news.ycombinator.com',
-    'hacker news': 'https://news.ycombinator.com',
-    kaggle:     'https://www.kaggle.com',
-    huggingface:'https://huggingface.co',
-    'hugging face': 'https://huggingface.co',
-    codepen:    'https://codepen.io',
-    replit:     'https://replit.com',
-    vercel:     'https://vercel.com',
-    netlify:    'https://www.netlify.com',
-    aws:        'https://aws.amazon.com',
-    azure:      'https://portal.azure.com',
-  };
+    // Common site name → URL mapping
+    const siteMap = {
+      youtube:    'https://www.youtube.com',
+      google:     'https://www.google.com',
+      gmail:      'https://mail.google.com',
+      github:     'https://github.com',
+      twitter:    'https://twitter.com',
+      x:          'https://x.com',
+      reddit:     'https://www.reddit.com',
+      facebook:   'https://www.facebook.com',
+      instagram:  'https://www.instagram.com',
+      linkedin:   'https://www.linkedin.com',
+      netflix:    'https://www.netflix.com',
+      spotify:    'https://open.spotify.com',
+      amazon:     'https://www.amazon.com',
+      wikipedia:  'https://en.wikipedia.org',
+      stackoverflow: 'https://stackoverflow.com',
+      'stack overflow': 'https://stackoverflow.com',
+      chatgpt:    'https://chat.openai.com',
+      whatsapp:   'https://web.whatsapp.com',
+      discord:    'https://discord.com',
+      twitch:     'https://www.twitch.tv',
+      pinterest:  'https://www.pinterest.com',
+      notion:     'https://www.notion.so',
+      figma:      'https://www.figma.com',
+      canva:      'https://www.canva.com',
+      drive:      'https://drive.google.com',
+      'google drive': 'https://drive.google.com',
+      maps:       'https://maps.google.com',
+      'google maps': 'https://maps.google.com',
+      calendar:   'https://calendar.google.com',
+      'google calendar': 'https://calendar.google.com',
+      docs:       'https://docs.google.com',
+      'google docs': 'https://docs.google.com',
+      sheets:     'https://sheets.google.com',
+      'google sheets': 'https://sheets.google.com',
+      slides:     'https://slides.google.com',
+      'google slides': 'https://slides.google.com',
+      medium:     'https://medium.com',
+      hackernews: 'https://news.ycombinator.com',
+      'hacker news': 'https://news.ycombinator.com',
+      kaggle:     'https://www.kaggle.com',
+      huggingface:'https://huggingface.co',
+      'hugging face': 'https://huggingface.co',
+      codepen:    'https://codepen.io',
+      replit:     'https://replit.com',
+      vercel:     'https://vercel.com',
+      netlify:    'https://www.netlify.com',
+      aws:        'https://aws.amazon.com',
+      azure:      'https://portal.azure.com',
+    };
 
-  const lower = input.toLowerCase().replace(/[^a-z0-9 ./:]/g, '');
+    const lower = input.toLowerCase().replace(/[^a-z0-9 ./:]/g, '');
 
-  // Check site map first
-  if (siteMap[lower]) {
-    return { url: siteMap[lower], name: input, status: 'Opening in new tab' };
-  }
+    let finalUrl = '';
+    // Check site map first
+    if (siteMap[lower]) {
+      finalUrl = siteMap[lower];
+    } else if (input.startsWith('http://') || input.startsWith('https://')) {
+      finalUrl = input;
+    } else if (input.includes('.')) {
+      finalUrl = input.startsWith('http') ? input : `https://${input}`;
+    } else {
+      finalUrl = `https://www.google.com/search?q=${encodeURIComponent(input)}`;
+    }
 
-  // If it already looks like a URL, use it
-  if (input.startsWith('http://') || input.startsWith('https://')) {
-    return { url: input, name: input, status: 'Opening in new tab' };
-  }
-
-  // If it has a dot, treat as domain
-  if (input.includes('.')) {
-    const url = input.startsWith('http') ? input : `https://${input}`;
-    return { url, name: input, status: 'Opening in new tab' };
-  }
-
-  // Last resort: Google search for the term
-  return {
-    url: `https://www.google.com/search?q=${encodeURIComponent(input)}`,
-    name: input,
-    status: 'Searching and opening in new tab'
-  };
+    const command = process.platform === 'win32' ? `start zen.exe "${finalUrl}"` : `open -a "Zen Browser" "${finalUrl}"`;
+    
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+         // Fallback to default browser if Zen is not found
+         const fallback = process.platform === 'win32' ? `start "" "${finalUrl}"` : `open "${finalUrl}"`;
+         exec(fallback, () => {
+             resolve({ url: finalUrl, name: input, status: 'Opened in default browser (Zen not found)' });
+         });
+      } else {
+         resolve({ url: finalUrl, name: input, status: 'Opened in Zen browser' });
+      }
+    });
+  });
 }
 
 async function executeListDirectory(args) {
@@ -798,15 +803,41 @@ async function executeConfirmAction(args) {
 
 async function executeOpenApplication(args) {
   return new Promise((resolve) => {
-    // start "" "app" is the windows way to open a background GUI process
-    const command = process.platform === 'win32' ? `start "" "${args.appName}"` : `open "${args.appName}"`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-         resolve({ error: `Failed to open application: ${error.message}` });
-      } else {
-         resolve({ status: `Application ${args.appName} opened successfully` });
-      }
-    });
+    if (process.platform === 'win32') {
+      const appName = args.appName.replace(/"/g, '`"');
+      const psScript = `
+$appName = "${appName}";
+$app = Get-StartApps | Where-Object { $_.Name -match $appName } | Select-Object -First 1;
+if ($app) {
+    Start-Process "explorer.exe" "shell:AppsFolder\\$($app.AppID)";
+} else {
+    try {
+        Start-Process $appName -ErrorAction Stop;
+    } catch {
+        Write-Error "Application not found";
+        exit 1;
+    }
+}
+`;
+      const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
+      const command = `powershell -ExecutionPolicy Bypass -NoProfile -EncodedCommand ${encodedCommand}`;
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+           resolve({ error: `Failed to open application: ${error.message}` });
+        } else {
+           resolve({ status: `Application ${args.appName} opened successfully` });
+        }
+      });
+    } else {
+      const command = `open "${args.appName}"`;
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+           resolve({ error: `Failed to open application: ${error.message}` });
+        } else {
+           resolve({ status: `Application ${args.appName} opened successfully` });
+        }
+      });
+    }
   });
 }
 
