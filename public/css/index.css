@@ -1,232 +1,121 @@
-/* ═══════════════════════════════════════════════════════════════════════════
-   J.A.R.V.I.S. Design System — index.css
-   Core tokens, resets, typography, and shared utilities
-   ═══════════════════════════════════════════════════════════════════════════ */
-
 :root {
-  /* ─── Color Palette ─────────────────────────────────────────────────── */
-  --bg-primary:       #060a13;
-  --bg-secondary:     #0a0e17;
-  --bg-tertiary:      #0f1523;
-
-  --jarvis-cyan:      #00d4ff;
-  --jarvis-cyan-dim:  #00a3cc;
-  --jarvis-cyan-glow: rgba(0, 212, 255, 0.3);
-  --jarvis-blue:      #0077ff;
-  --jarvis-blue-dim:  #005cc5;
-
-  --accent-gold:      #f0b429;
-  --accent-gold-glow: rgba(240, 180, 41, 0.3);
-  --accent-red:       #ff3b5c;
-  --accent-red-glow:  rgba(255, 59, 92, 0.3);
-  --accent-green:     #00e676;
-  --accent-green-glow:rgba(0, 230, 118, 0.3);
-
-  --text-primary:     #e8edf5;
-  --text-secondary:   #8892a4;
-  --text-muted:       #4a5568;
-
-  /* ─── Glass / Glassmorphism ─────────────────────────────────────────── */
-  --glass-bg:         rgba(10, 14, 23, 0.65);
-  --glass-bg-light:   rgba(20, 28, 45, 0.55);
-  --glass-border:     rgba(0, 212, 255, 0.12);
-  --glass-border-hover: rgba(0, 212, 255, 0.25);
-  --glass-blur:       16px;
-  --glass-radius:     12px;
-
-  /* ─── Typography ────────────────────────────────────────────────────── */
-  --font-display:     'Orbitron', sans-serif;
-  --font-body:        'Rajdhani', sans-serif;
-
-  --fs-xs:   0.7rem;
-  --fs-sm:   0.8rem;
-  --fs-base: 0.95rem;
-  --fs-md:   1.05rem;
-  --fs-lg:   1.3rem;
-  --fs-xl:   1.6rem;
-  --fs-2xl:  2rem;
-  --fs-3xl:  2.5rem;
-
-  /* ─── Spacing ───────────────────────────────────────────────────────── */
-  --space-xs:  0.25rem;
-  --space-sm:  0.5rem;
-  --space-md:  1rem;
-  --space-lg:  1.5rem;
-  --space-xl:  2rem;
-  --space-2xl: 3rem;
-
-  /* ─── Transitions ───────────────────────────────────────────────────── */
-  --transition-fast:    150ms ease;
-  --transition-normal:  300ms ease;
-  --transition-slow:    500ms ease;
-
-  /* ─── Z-Index Scale ─────────────────────────────────────────────────── */
-  --z-canvas:    -1;
-  --z-base:       1;
-  --z-panel:     10;
-  --z-header:    20;
-  --z-footer:    20;
-  --z-modal:    100;
+  --accent: #9DB4FF;
+  --listening: #9DB4FF;
+  --processing: #F0C36B;
+  --speaking: #7FE7C4;
+  --error: #FF8A73;
+  --idle: #54585f;
+  --text: #EDEEF0;
+  --text-dim: #75797f;
+  --sans: 'Space Grotesk', sans-serif;
+  --mono: 'IBM Plex Mono', monospace;
+  --bg-modal: rgba(10, 11, 13, 0.85);
+  --state-color: var(--idle);
 }
 
-/* ─── Reset ─────────────────────────────────────────────────────────────── */
-
-*, *::before, *::after {
+* {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html {
-  font-size: 16px;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
-
-body {
-  font-family: var(--font-body);
-  font-weight: 400;
-  color: var(--text-primary);
-  background: var(--bg-primary);
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: transparent !important;
+  font-family: var(--sans);
   overflow: hidden;
-  width: 100vw;
-  height: 100vh;
+}
+
+/* Container spanning the entire transparent screen */
+#desktop-container {
   position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* Let clicks pass through the background */
 }
 
-a {
-  color: var(--jarvis-cyan);
-  text-decoration: none;
-  transition: color var(--transition-fast);
+/* Allow interaction with UI elements */
+#desktop-container > * {
+  pointer-events: auto;
 }
-a:hover {
-  color: var(--jarvis-cyan-dim);
-  text-decoration: underline;
-}
-
-input, button {
-  font-family: var(--font-body);
-  border: none;
-  outline: none;
-  background: none;
-  color: inherit;
-}
-
-button {
-  cursor: pointer;
-}
-
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(0, 212, 255, 0.2);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 212, 255, 0.4);
-}
-
-::selection {
-  background: rgba(0, 212, 255, 0.3);
-  color: #fff;
-}
-
-/* ─── Shared Animations ─────────────────────────────────────────────────── */
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes fadeInScale {
-  from {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.5; }
-}
-
-@keyframes glowPulse {
-  0%, 100% { box-shadow: 0 0 5px var(--jarvis-cyan-glow), 0 0 15px var(--jarvis-cyan-glow); }
-  50%      { box-shadow: 0 0 10px var(--jarvis-cyan-glow), 0 0 30px var(--jarvis-cyan-glow), 0 0 50px var(--jarvis-cyan-glow); }
-}
-
-@keyframes scanLine {
-  0%   { top: -2px; }
-  100% { top: calc(100% + 2px); }
-}
-
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes slideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-/* ─── Utility Classes ───────────────────────────────────────────────────── */
 
 .hidden {
   display: none !important;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  border: 0;
+/* Modal styling (API Key) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-modal);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  pointer-events: auto;
 }
 
-/* ─── Canvas Background ─────────────────────────────────────────────────── */
+.modal-content {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 40px;
+  border-radius: 12px;
+  text-align: center;
+  width: 400px;
+  color: var(--text);
+}
 
-#particle-canvas {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: var(--z-canvas);
-  pointer-events: none;
+.modal-title {
+  font-family: var(--mono);
+  font-size: 24px;
+  letter-spacing: 4px;
+  margin-bottom: 8px;
+}
+
+.modal-subtitle {
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin-bottom: 24px;
+}
+
+.modal-input-group {
+  display: flex;
+  gap: 10px;
+}
+
+.modal-input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  padding: 10px 14px;
+  font-family: var(--mono);
+  border-radius: 4px;
+  outline: none;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-submit {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  padding: 10px 20px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-weight: bold;
+  letter-spacing: 1px;
+  border-radius: 4px;
+}
+
+.modal-submit:hover {
+  background: rgba(255, 255, 255, 0.15);
 }

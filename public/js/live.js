@@ -63,7 +63,7 @@
                         speechConfig: {
                            voiceConfig: {
                               prebuiltVoiceConfig: {
-                                 voiceName: "Puck"
+                                 voiceName: "Capella"
                               }
                            }
                         }
@@ -143,10 +143,29 @@
 
          if (msg.serverContent && msg.serverContent.modelTurn) {
             const parts = msg.serverContent.modelTurn.parts;
+            let hasAudio = false;
+            let textBuffer = '';
+
             for (const part of parts) {
                if (part.inlineData && part.inlineData.mimeType.startsWith('audio/pcm')) {
                   this.playAudioChunk(part.inlineData.data);
+                  hasAudio = true;
                }
+               if (part.text) {
+                  textBuffer += part.text;
+               }
+            }
+
+            if (textBuffer.trim().length > 0) {
+               window.appendMessage('jarvis', textBuffer);
+               this.showCaption(textBuffer);
+            }
+            if (hasAudio && window.setWidgetState) {
+               window.setWidgetState('speaking');
+               clearTimeout(this.idleTimeout);
+               this.idleTimeout = setTimeout(() => {
+                  window.setWidgetState('idle');
+               }, 3000);
             }
          }
 
@@ -190,36 +209,40 @@
 
             if (fc.name === 'start_camera') {
                const vision = window.JarvisVision;
-               if (vision && (!vision.isActive || vision.isScreen)) {
-                  const btn = document.getElementById('camera-button');
-                  if (btn) btn.click();
+               if (vision) {
+                  await vision.startCamera();
                }
                functionResponses.push({ id: fc.id, name: fc.name, response: { result: { status: 'Camera initialized' } } });
                continue;
             }
+            if (fc.name === 'display_subtitle') {
+               if (fc.args && fc.args.text) {
+                  window.appendMessage('jarvis', fc.args.text);
+                  this.showCaption(fc.args.text);
+               }
+               functionResponses.push({ id: fc.id, name: fc.name, response: { result: { status: 'Subtitle displayed' } } });
+               continue;
+            }
             if (fc.name === 'stop_camera') {
                const vision = window.JarvisVision;
-               if (vision && vision.isActive && !vision.isScreen) {
-                  const btn = document.getElementById('camera-button');
-                  if (btn) btn.click();
+               if (vision) {
+                  vision.stopCamera();
                }
                functionResponses.push({ id: fc.id, name: fc.name, response: { result: { status: 'Camera stopped' } } });
                continue;
             }
             if (fc.name === 'start_screen_capture') {
                const vision = window.JarvisVision;
-               if (vision && (!vision.isActive || !vision.isScreen)) {
-                  const btn = document.getElementById('screen-button');
-                  if (btn) btn.click();
+               if (vision) {
+                  await vision.startScreenCapture();
                }
                functionResponses.push({ id: fc.id, name: fc.name, response: { result: { status: 'Screen capture initialized' } } });
                continue;
             }
             if (fc.name === 'stop_screen_capture') {
                const vision = window.JarvisVision;
-               if (vision && vision.isActive && vision.isScreen) {
-                  const btn = document.getElementById('screen-button');
-                  if (btn) btn.click();
+               if (vision) {
+                  vision.stopScreenCapture();
                }
                functionResponses.push({ id: fc.id, name: fc.name, response: { result: { status: 'Screen capture stopped' } } });
                continue;
@@ -240,11 +263,22 @@
                continue;
             }
 
+            if (fc.name === 'open_file') {
+               const viewFile = window.viewFile || (() => { });
+               viewFile(fc.args.path);
+               functionResponses.push({ id: fc.id, name: fc.name, response: { result: { status: 'File opened in editor view' } } });
+               continue;
+            }
+
             // Flash UI tool capability
             const toolMap = {
                get_current_time: 'time', get_weather: 'weather', search_web: 'search',
-               calculate: 'calculate', set_reminder: 'reminder', get_news: 'news',
-               tell_joke: 'joke', system_status: 'system', open_website: 'website'
+               calculate: 'calculate', set_reminder: 'memory', list_reminders: 'memory', cancel_reminder: 'memory',
+               remember: 'memory', recall: 'memory', get_news: 'search',
+               tell_joke: 'system', system_status: 'system', open_website: 'computer',
+               mouse_action: 'computer', keyboard_action: 'computer', get_screen_elements: 'computer',
+               take_snapshot: 'vision', start_camera: 'vision', stop_camera: 'vision',
+               start_screen_capture: 'vision', stop_screen_capture: 'vision'
             };
             const toolKey = toolMap[fc.name];
             if (toolKey) {
@@ -264,6 +298,7 @@
                }
             }
 
+            window.setWidgetState && window.setWidgetState('processing');
             const res = await fetch('/api/tools/execute', {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
@@ -305,6 +340,7 @@
                         }
                      }
                   }));
+                  window.setWidgetState && window.setWidgetState('listening');
                }
             };
 
@@ -317,6 +353,7 @@
 
          } catch (e) {
             console.error('[Live] Failed to capture audio', e);
+            window.setWidgetState && window.setWidgetState('error');
          }
       }
 
@@ -335,6 +372,7 @@
 
       sendClientContent(text) {
          if (this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            window.setWidgetState && window.setWidgetState('processing');
             this.ws.send(JSON.stringify({
                clientContent: {
                   turns: [{
@@ -344,6 +382,22 @@
                   turnComplete: true
                }
             }));
+         }
+      }
+
+      showCaption(text) {
+         const captionContainer = document.getElementById('caption-container');
+         const captionText = document.getElementById('caption-text');
+         if (captionContainer && captionText) {
+            captionText.textContent = text;
+            captionContainer.classList.remove('hidden');
+            captionContainer.style.opacity = '1';
+
+            clearTimeout(this.captionTimeout);
+            this.captionTimeout = setTimeout(() => {
+               captionContainer.style.opacity = '0';
+               setTimeout(() => captionContainer.classList.add('hidden'), 400); // Wait for transition
+            }, 5000); // Show caption for 5 seconds
          }
       }
 

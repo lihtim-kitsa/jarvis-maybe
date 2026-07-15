@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, session, desktopCapturer } from 'electron';
+import { app, BrowserWindow, globalShortcut, session, desktopCapturer, screen } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -11,11 +11,19 @@ const __dirname = path.dirname(__filename);
 let mainWindow;
 
 function createWindow() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.size;
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    frame: false, // Frameless window as requested
-    transparent: true, // Allows for cool HUD effects if CSS supports it
+    width,
+    height,
+    x: 0,
+    y: 0,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true, // Useful for the widget to float over other apps
+    skipTaskbar: true, // Since it's a widget, optionally hide from taskbar
+    resizable: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false

@@ -261,6 +261,20 @@ const toolDeclarations = [
     }
   },
   {
+    name: 'display_subtitle',
+    description: 'Call this tool to display subtitles/captions of what you are saying to the user. ALWAYS call this tool with the exact text of your spoken response.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The exact text you are about to speak.'
+        }
+      },
+      required: ['text']
+    }
+  },
+  {
     name: 'confirm_action',
     description: 'Execute a previously blocked destructive action after the user gives explicit verbal confirmation.',
     parameters: {
@@ -332,6 +346,37 @@ const toolDeclarations = [
       },
       required: ['path', 'pattern']
     }
+  },
+  {
+    name: 'mouse_action',
+    description: 'Perform a mouse action (move, click, drag) at specific screen coordinates.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'The mouse action to perform: "mouse_move", "mouse_click", "mouse_drag"' },
+        x: { type: 'number', description: 'X coordinate (required for move/drag)' },
+        y: { type: 'number', description: 'Y coordinate (required for move/drag)' },
+        button: { type: 'string', description: 'Mouse button: "left", "right", "middle"' }
+      },
+      required: ['action']
+    }
+  },
+  {
+    name: 'keyboard_action',
+    description: 'Perform a keyboard action (type text, press key).',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', description: 'The keyboard action to perform: "keyboard_type", "keyboard_press"' },
+        text: { type: 'string', description: 'The text to type (required for keyboard_type)' },
+        key: { type: 'string', description: 'The key to press, e.g., "enter", "space", "ctrl" (required for keyboard_press)' }
+      },
+      required: ['action']
+    }
+  },
+  {
+    name: 'get_screen_elements',
+    description: 'Scan the active window using accessibility APIs to get a list of actionable UI elements (buttons, inputs) and their coordinates. Use this before clicking or typing.',
   }
 ];
 
@@ -487,7 +532,7 @@ function executeCancelReminder(args) {
 async function executeRemember(args) {
   try {
     const response = await ai.models.embedContent({
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-2',
       contents: args.text,
     });
     const embedding = response.embeddings[0].values;
@@ -501,7 +546,7 @@ async function executeRemember(args) {
 async function executeRecall(args) {
   try {
     const response = await ai.models.embedContent({
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-2',
       contents: args.query,
     });
     const embedding = response.embeddings[0].values;
@@ -705,7 +750,7 @@ async function executeWriteFile(args) {
   const id = Math.random().toString(36).substring(7);
   pendingActions.set(id, { type: 'write_file', args });
   return { 
-    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, shall I proceed with writing to ${args.path}?". If they say yes, call confirm_action with id "${id}". Do NOT write the file yet.` 
+    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to proceed with writing to ${args.path}." If they provide the correct authorization code, call confirm_action with id "${id}". Do NOT write the file yet.` 
   };
 }
 
@@ -713,7 +758,7 @@ async function executeRunTerminalCommand(args) {
   const id = Math.random().toString(36).substring(7);
   pendingActions.set(id, { type: 'run_terminal_command', args });
   return { 
-    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization required to execute command: ${args.command}". If they say yes, call confirm_action with id "${id}". Do NOT execute yet.` 
+    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to execute command: ${args.command}." If they provide the correct authorization code, call confirm_action with id "${id}". Do NOT execute yet.` 
   };
 }
 
@@ -721,7 +766,7 @@ async function executeGitCommit(args) {
   const id = Math.random().toString(36).substring(7);
   pendingActions.set(id, { type: 'git_commit', args });
   return { 
-    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, shall I commit these changes with message '${args.message}'?". If they say yes, call confirm_action with id "${id}".` 
+    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to commit these changes." If they provide the correct authorization code, call confirm_action with id "${id}".` 
   };
 }
 
@@ -791,6 +836,42 @@ function executeWatchLog(args) {
   return { status: `Now monitoring ${args.path} for "${args.pattern}". You will be alerted if it appears.` };
 }
 
+async function executeComputerControl(args) {
+  return new Promise((resolve) => {
+    // Determine which python executable to use (venv or global)
+    const pythonExe = process.platform === 'win32' 
+      ? join(__dirname, '.venv', 'Scripts', 'python.exe')
+      : join(__dirname, '.venv', 'bin', 'python');
+      
+    // Fallback to global python if venv doesn't exist
+    const cmd = fs.existsSync(pythonExe) ? pythonExe : 'python';
+    
+    const pyProcess = spawn(cmd, [join(__dirname, 'computer_control.py')]);
+    
+    let stdoutData = '';
+    let stderrData = '';
+    
+    pyProcess.stdout.on('data', (data) => { stdoutData += data.toString(); });
+    pyProcess.stderr.on('data', (data) => { stderrData += data.toString(); });
+    
+    pyProcess.on('close', (code) => {
+      try {
+        if (stdoutData) {
+          resolve(JSON.parse(stdoutData));
+        } else {
+          resolve({ error: `Python script failed with code ${code}`, stderr: stderrData });
+        }
+      } catch (e) {
+        resolve({ error: 'Failed to parse python output', output: stdoutData, stderr: stderrData });
+      }
+    });
+    
+    // Send the JSON request to stdin
+    pyProcess.stdin.write(JSON.stringify(args));
+    pyProcess.stdin.end();
+  });
+}
+
 // Map tool names to execution functions
 const toolExecutors = {
   get_current_time: executeGetCurrentTime,
@@ -820,11 +901,15 @@ const toolExecutors = {
   search_codebase: (args) => searchCodebase(args.query, args.path || '.'),
   open_application: executeOpenApplication,
   watch_log: executeWatchLog,
+  mouse_action: executeComputerControl,
+  keyboard_action: executeComputerControl,
+  get_screen_elements: () => executeComputerControl({ action: 'get_screen_elements' }),
   start_camera: () => ({ status: 'Camera initialized' }), // Handled in frontend
   stop_camera: () => ({ status: 'Camera stopped' }), // Handled in frontend
   start_screen_capture: () => ({ status: 'Screen capture initialized' }), // Handled in frontend
   stop_screen_capture: () => ({ status: 'Screen capture stopped' }), // Handled in frontend
-  take_snapshot: () => ({ status: 'Snapshot taken' }) // Handled in frontend
+  take_snapshot: () => ({ status: 'Snapshot taken' }), // Handled in frontend
+  display_subtitle: () => ({ status: 'Subtitle displayed' }) // Handled in frontend
 };
 
 // ─── JARVIS System Prompt ──────────────────────────────────────────────────
@@ -857,6 +942,9 @@ CAPABILITIES:
 - **DEV TOOLS**: You can check git_status, git_diff, commit changes, run Python code, and search the codebase.
 - **SAFETY PROTOCOLS**: For destructive actions (writing files, committing, running terminal commands), the system will BLOCK the action and return an authorization ID. You MUST then verbally ask the user for permission. If they say yes, use the confirm_action tool with the provided ID.
 - **PROACTIVE MONITORING**: You can use the watch_log tool to continuously monitor a file for a pattern. If the pattern occurs, you will receive a [SYSTEM ALERT] message. When this happens, you MUST proactively speak up and alert the user immediately.
+- **COMPUTER CONTROL**: You can directly operate the host machine's mouse and keyboard! 
+  - ALWAYS use 'get_screen_elements' first to find the exact (x, y) coordinates of actionable UI elements in the current active window.
+  - Then use 'mouse_action' (mouse_move, mouse_click, mouse_drag) and 'keyboard_action' (keyboard_type, keyboard_press) to interact.
 - You can open local desktop applications using the open_application tool.
 - You can read and write to the system clipboard using get_clipboard and set_clipboard.
 - You have long-term memory! Use remember to store important facts, preferences, or context, and recall to fetch them later via semantic search.
@@ -867,10 +955,16 @@ TOOL USAGE:
 - If the user asks about weather, time, math, etc. — ALWAYS use the appropriate tool rather than guessing.
 - When reporting tool results, present them naturally as JARVIS would — integrated into your response, not as raw data dumps.
 
-FORMATTING:
+FORMATTING & CAPTIONS:
 - Keep responses natural and conversational since they will be spoken aloud via text-to-speech.
 - Avoid markdown formatting, bullet points, or code blocks in your responses.
-- Use natural language to convey structure instead.`;
+- Use natural language to convey structure instead.
+- **CRITICAL CAPTION PROTOCOL**: The system's voice module does NOT generate text transcripts automatically. Therefore, you MUST ALWAYS call the 'display_subtitle' tool with the exact text of your response before or while you are speaking it. If you do not call this tool, the user will not see any captions for what you are saying. Call it once per response block.
+
+AUTHORIZATION PROTOCOL:
+- The user's valid authorization code is "Afterlife".
+- For destructive actions (writing files, terminal commands, git commits), you will hit a SAFETY LOCK.
+- You must ask the user for authorization. If they do not provide the exact code "Afterlife", you must refuse to proceed.`;
 
 // ─── API Routes ────────────────────────────────────────────────────────────
 

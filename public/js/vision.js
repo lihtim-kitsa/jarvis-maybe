@@ -1,122 +1,112 @@
-/* ═══════════════════════════════════════════════════════════════════════════
-   J.A.R.V.I.S. Vision Interface — vision.js
-   WebRTC API — Webcam and Screen Capture
-   ═══════════════════════════════════════════════════════════════════════════ */
+const visionPopup = document.getElementById('vision-popup');
+const visionClose = document.getElementById('vision-close');
+const videoElement = document.getElementById('vision-video');
+const snapshotContainer = document.getElementById('vision-snapshot-container');
+const snapshotImg = document.getElementById('vision-snapshot');
+const statusText = document.getElementById('vision-status');
 
-(function () {
-  'use strict';
+const camBtn = document.getElementById('camera-button');
+const screenBtn = document.getElementById('screen-button');
 
-  class VisionManager {
-    constructor() {
-      this.stream = null;
-      this.videoEl = document.getElementById('vision-video');
-      this.snapshotEl = document.getElementById('vision-snapshot');
-      this.snapshotContainer = document.getElementById('vision-snapshot-container');
-      this.overlayEl = document.getElementById('vision-overlay');
-      this.closeBtn = document.getElementById('vision-close-btn');
-      
-      this.canvasEl = document.createElement('canvas');
-      this.ctx = this.canvasEl.getContext('2d');
-      this.isActive = false;
-      this.isScreen = false;
-      this.onStop = null;
+let currentStream = null;
+let currentMode = null;
 
-      if (this.closeBtn) {
-        this.closeBtn.addEventListener('click', () => {
-          this.stop();
-          if (this.onStop) this.onStop();
-        });
-      }
+visionClose.addEventListener('click', () => {
+  stopVision();
+  visionPopup.classList.add('hidden');
+});
+
+function showVisionPopup() {
+  visionPopup.classList.remove('hidden');
+}
+
+async function startVision(mode) {
+  try {
+    if (currentStream) stopVision();
+    
+    showVisionPopup();
+    statusText.textContent = `INITIALIZING ${mode.toUpperCase()}...`;
+    
+    if (mode === 'camera') {
+      currentStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    } else {
+      currentStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
     }
-
-    async startCamera() {
-      if (this.isActive) this.stop();
-      try {
-        this.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-        return this._bindStream(false);
-      } catch (err) {
-        console.error("[Vision] Camera access denied or error:", err);
-        return false;
-      }
-    }
-
-    async startScreen() {
-      if (this.isActive) this.stop();
-      try {
-        this.stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        return this._bindStream(true);
-      } catch (err) {
-        console.error("[Vision] Screen access denied or error:", err);
-        return false;
-      }
-    }
-
-    _bindStream(isScreen) {
-      if (!this.stream || !this.videoEl) return false;
-      
-      this.videoEl.srcObject = this.stream;
-      this.videoEl.play();
-      this.isActive = true;
-      this.isScreen = isScreen;
-      
-      if (this.overlayEl) {
-        this.overlayEl.classList.remove('hidden');
-      }
-      if (this.snapshotContainer) {
-        this.snapshotContainer.classList.add('hidden');
-      }
-
-      // Handle user stopping stream via browser UI (especially for screen share)
-      const track = this.stream.getVideoTracks()[0];
-      if (track) {
-        track.onended = () => {
-          this.stop();
-          if (this.onStop) this.onStop();
-        };
-      }
-      return true;
-    }
-
-    stop() {
-      if (this.stream) {
-        this.stream.getTracks().forEach(track => track.stop());
-        this.stream = null;
-      }
-      if (this.videoEl) {
-        this.videoEl.srcObject = null;
-      }
-      if (this.overlayEl) {
-        this.overlayEl.classList.add('hidden');
-      }
-      this.isActive = false;
-    }
-
-    takeSnapshot() {
-      if (!this.isActive || !this.videoEl || this.videoEl.videoWidth === 0) return null;
-      
-      this.canvasEl.width = this.videoEl.videoWidth;
-      this.canvasEl.height = this.videoEl.videoHeight;
-      
-      this.ctx.drawImage(this.videoEl, 0, 0, this.canvasEl.width, this.canvasEl.height);
-      
-      const base64Image = this.canvasEl.toDataURL('image/jpeg', 0.8);
-      
-      // Show snapshot in UI temporarily
-      if (this.snapshotEl && this.snapshotContainer) {
-        this.snapshotEl.src = base64Image;
-        this.snapshotContainer.classList.remove('hidden');
-        
-        // Hide it after 4 seconds
-        setTimeout(() => {
-          this.snapshotContainer.classList.add('hidden');
-        }, 4000);
-      }
-      
-      return base64Image;
-    }
+    
+    videoElement.srcObject = currentStream;
+    currentMode = mode;
+    snapshotContainer.classList.add('hidden');
+    statusText.textContent = `${mode.toUpperCase()} ACTIVE`;
+    
+    // Update button states
+    camBtn.classList.toggle('active', mode === 'camera');
+    screenBtn.classList.toggle('active', mode === 'screen');
+    
+    window.appendLog(`Vision system online: ${mode}`);
+    return true;
+  } catch (err) {
+    statusText.textContent = 'ERROR';
+    window.appendLog(`Vision error: ${err.message}`);
+    return false;
   }
+}
 
-  window.addEventListener('DOMContentLoaded', () => {
-    window.JarvisVision = new VisionManager();
-  });
-})();
+function stopVision() {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+    currentStream = null;
+  }
+  videoElement.srcObject = null;
+  currentMode = null;
+  camBtn.classList.remove('active');
+  screenBtn.classList.remove('active');
+  statusText.textContent = 'OFFLINE';
+}
+
+camBtn.addEventListener('click', () => {
+  if (currentMode === 'camera') stopVision();
+  else startVision('camera');
+});
+
+screenBtn.addEventListener('click', () => {
+  if (currentMode === 'screen') stopVision();
+  else startVision('screen');
+});
+
+// Exposed globally for JARVIS
+window.JarvisVision = {
+  get isActive() { return currentStream !== null; },
+  get isScreen() { return currentMode === 'screen'; },
+  startCamera: async () => { if (currentMode !== 'camera') return await startVision('camera'); return true; },
+  stopCamera: () => { if (currentMode === 'camera') stopVision(); },
+  startScreenCapture: async () => { if (currentMode !== 'screen') return await startVision('screen'); return true; },
+  stopScreenCapture: () => { if (currentMode === 'screen') stopVision(); },
+  takeSnapshot: function() {
+    if (!currentStream) return null;
+    showVisionPopup();
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = videoElement.videoWidth;
+    canvas.height = videoElement.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    
+    snapshotImg.src = dataUrl;
+    snapshotContainer.classList.remove('hidden');
+    statusText.textContent = 'SNAPSHOT CAPTURED';
+    
+    setTimeout(() => {
+      snapshotContainer.classList.add('hidden');
+      statusText.textContent = `${currentMode ? currentMode.toUpperCase() : ''} ACTIVE`;
+    }, 1000);
+    
+    return dataUrl.split(',')[1];
+  }
+};
+
+window.isVisionActive = () => currentStream !== null;
+window.startCamera = () => startVision('camera');
+window.startScreen = () => startVision('screen');
+window.stopVision = stopVision;
