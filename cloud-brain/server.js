@@ -1,20 +1,74 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
+import http from 'http';
+import { WebSocketServer } from 'ws';
 import { GoogleGenAI } from '@google/genai';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import { exec } from 'child_process';
 import clipboardy from 'clipboardy';
-import { addMemory, searchMemory, addReminder, getPendingReminders, deleteReminder } from './database.js';
-import { gitStatus, gitDiff, gitCommit, runPython, searchCodebase } from './dev_tools.js';
+import localtunnel from 'localtunnel';
+import { addMemory, searchMemory, addReminder, getPendingReminders, deleteReminder, logError, getErrorsForTool, logAudit, getAuditTrail } from './database.js';
+import { searchGithub, sendSlackMessage, searchNotion, listGmail } from './integrations.js';
+import { getUpcomingEvents } from './google_calendar.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, '..', '.env') });
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const app = express();
+const server = http.createServer(app);
+
+let localHandsWs = null;
+const pendingToolCalls = new Map();
+
+const wss = new WebSocketServer({ noServer: true });
+wss.on('connection', (ws) => {
+  console.log('[Cloud Brain] Local Hands connected!');
+  localHandsWs = ws;
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      if (data.type === 'tool_result') {
+        const resolve = pendingToolCalls.get(data.id);
+        if (resolve) {
+          resolve(data.result);
+          pendingToolCalls.delete(data.id);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse WS message:', e);
+    }
+  });
+  ws.on('close', () => {
+    console.log('[Cloud Brain] Local Hands disconnected.');
+    localHandsWs = null;
+  });
+});
+
+async function forwardToLocalHands(toolName, args = {}) {
+  if (!localHandsWs || localHandsWs.readyState !== 1) {
+    return { error: 'No Local Hands instance is currently connected.' };
+  }
+  return new Promise((resolve) => {
+    const id = Math.random().toString(36).substring(7);
+    pendingToolCalls.set(id, resolve);
+    localHandsWs.send(JSON.stringify({ type: 'tool_call', id, tool: toolName, args }));
+    
+    // Timeout after 60s
+    setTimeout(() => {
+      if (pendingToolCalls.has(id)) {
+        pendingToolCalls.delete(id);
+        resolve({ error: `Tool call ${toolName} timed out.` });
+      }
+    }, 60000);
+  });
+}
+
 const PORT = process.env.PORT || 3000;
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 
@@ -24,7 +78,110 @@ app.use(express.static(join(__dirname, 'public')));
 
 // ─── Tool Definitions (Gemini Function Declarations) ───────────────────────
 
-const toolDeclarations = [
+let jarvisConfig = {
+  mode: 'Just Do It', // or 'Teach Me'
+  tiredMode: false,
+  flavor: 'British', // 'British', 'Cyberpunk', 'Gojo', etc.
+  voice: 'Aoede', // 'Aoede', 'Puck', 'Charon', 'Fenrir', 'Kore'
+  expertMode: 'General' // 'General', 'Programming & Coding', 'Research & Drafting', 'Web Development'
+};
+
+let activeTaskState = {
+  currentTask: "None",
+  pendingQuestions: [],
+  openFiles: [],
+  lastUpdated: Date.now()
+};
+
+let lastActivityTimestamp = Date.now();
+
+let toolDeclarations = [
+  {
+    name: 'update_jarvis_config',
+    description: 'Update your own behavior, tone, and voice configuration based on user requests.',
+    parameters: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['Just Do It', 'Teach Me'] },
+        tiredMode: { type: 'boolean' },
+        flavor: { type: 'string' },
+        voice: { type: 'string', enum: ['Aoede', 'Puck', 'Charon', 'Fenrir', 'Kore'] },
+        expertMode: { type: 'string', enum: ['General', 'Programming & Coding', 'Research & Drafting', 'Web Development'] }
+      }
+    }
+  },
+  {
+    name: 'update_task_state',
+    description: 'Continuously update JARVISs short-term memory about the current active task so context is never lost if interrupted.',
+    parameters: {
+      type: 'object',
+      properties: {
+        currentTask: { type: 'string', description: 'A brief summary of what we are currently trying to accomplish.' },
+        pendingQuestions: { type: 'array', items: { type: 'string' }, description: 'Unresolved questions or decisions blocking progress.' },
+        openFiles: { type: 'array', items: { type: 'string' }, description: 'Important files currently being edited.' }
+      },
+      required: ['currentTask']
+    }
+  },
+  {
+    name: 'propose_new_tool',
+    description: 'Draft a new JavaScript tool/skill for JARVIS. It will be saved to the plugins/ directory and hot-reloaded into the Cloud Brain.',
+    parameters: {
+      type: 'object',
+      properties: {
+        toolName: { type: 'string', description: 'The exact name of the tool function.' },
+        description: { type: 'string', description: 'What the tool does (for Gemini to understand).' },
+        parametersSchema: { type: 'string', description: 'JSON string of the OpenAPI parameters schema.' },
+        jsCode: { type: 'string', description: 'The JavaScript code for the tool. Must export a default async function taking args.' }
+      },
+      required: ['toolName', 'description', 'parametersSchema', 'jsCode']
+    }
+  },
+  {
+    name: 'sandbox_automation',
+    description: 'Test a Local Hands computer control automation chain against a simulated UI tree to verify it works safely before doing it for real.',
+    parameters: {
+      type: 'object',
+      properties: {
+        actions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['mouse_click', 'type_text', 'press_key', 'inspect_ui', 'read_screen'] },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              text: { type: 'string' },
+              key: { type: 'string' }
+            }
+          }
+        }
+      },
+      required: ['actions']
+    }
+  },
+  {
+    name: 'export_audit_log',
+    description: 'Export the audit trail for a specific session to a local markdown file. Call this when asked to dump provenance or export research logs.',
+    parameters: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'The session ID to export. If omitted, defaults to the current date.' }
+      }
+    }
+  },
+  {
+    name: 'log_failure',
+    description: 'Explicitly log a failure or mistake you made so you remember not to do it again in the future. Call this when the user corrects you or an action fails.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', description: 'The name of the tool that failed.' },
+        message: { type: 'string', description: 'What went wrong and what you should do instead next time.' }
+      },
+      required: ['tool', 'message']
+    }
+  },
   {
     name: 'get_current_time',
     description: 'Get the current date and time. Can return time in different timezones.',
@@ -204,6 +361,18 @@ const toolDeclarations = [
     parameters: { type: 'object', properties: {} }
   },
   {
+    name: 'open_application',
+    description: 'Open a specific application, website, or deep link on the specified device (laptop or phone).',
+    parameters: {
+      type: 'object',
+      properties: {
+        device: { type: 'string', enum: ['laptop', 'phone'], description: 'The device to open the application on.' },
+        appName: { type: 'string', description: 'The application name, URL, or deep link to open.' }
+      },
+      required: ['device', 'appName']
+    }
+  },
+  {
     name: 'take_snapshot',
     description: 'Take a photo from the currently active camera or screen capture to see what is currently happening. Use this to actively look at the user or their screen once the camera/screen is turned on.',
     parameters: { type: 'object', properties: {} }
@@ -231,7 +400,7 @@ const toolDeclarations = [
         path: {
           type: 'string',
           description: 'Absolute or relative path to the file'
-  }
+        }
       },
       required: ['path']
     }
@@ -252,6 +421,18 @@ const toolDeclarations = [
   }
       },
       required: ['path', 'content']
+    }
+  },
+  {
+    name: 'draft_code',
+    description: 'Delegate a coding task to a background sub-agent. It will write code into the specified output file based on your prompt. Use this for complex generation instead of doing it yourself to keep the voice loop fast.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'The prompt or instruction for the sub-agent.' },
+        outputFilePath: { type: 'string', description: 'The file path where the generated code should be saved.' }
+      },
+      required: ['prompt', 'outputFilePath']
     }
   },
   {
@@ -283,6 +464,18 @@ const toolDeclarations = [
     }
   },
   {
+    name: 'report_reasoning',
+    description: 'Use this tool before executing a complex multi-step chain of actions (especially involving the Local Hands). It reports your plan and chain-of-thought to the user so they can observe your orchestration.',
+    parameters: {
+      type: 'object',
+      properties: {
+        plan: { type: 'string', description: 'A short sentence summarizing what you are about to do.' },
+        steps: { type: 'array', items: { type: 'string' }, description: 'The exact step-by-step actions you plan to take.' }
+      },
+      required: ['plan', 'steps']
+    }
+  },
+  {
     name: 'confirm_action',
     description: 'Execute a previously blocked destructive action after the user gives explicit verbal confirmation.',
     parameters: {
@@ -311,6 +504,26 @@ const toolDeclarations = [
     }
   },
   {
+    name: 'draft_commit',
+    description: 'Auto-generate a high-quality conventional commit message based on the actual git diff. Returns the suggested commit message.',
+    parameters: {
+      type: 'object',
+      properties: {
+        cwd: { type: 'string', description: 'Absolute path to the git repository.' }
+      },
+      required: ['cwd']
+    }
+  },
+  {
+    name: 'watch_project',
+    description: 'Start watching a project directory for file saves. When a file is saved, JARVIS will automatically generate a 1-sentence audio code review diff and alert the user.',
+    parameters: {
+      type: 'object',
+      properties: { directory: { type: 'string', description: 'Absolute path to the project directory.' } },
+      required: ['directory']
+    }
+  },
+  {
     name: 'run_python',
     description: 'Execute a snippet of Python code safely and return the output.',
     parameters: {
@@ -329,20 +542,6 @@ const toolDeclarations = [
         path: { type: 'string', description: 'The directory to search in (defaults to current directory ".")' }
       },
       required: ['query']
-    }
-  },
-  {
-    name: 'open_application',
-    description: 'Open a local desktop application (e.g., calculator, notepad, VS Code, etc.).',
-    parameters: {
-      type: 'object',
-      properties: {
-        appName: {
-          type: 'string',
-          description: 'The name of the application or the executable to run (e.g. "calc", "notepad", "code")'
-  }
-      },
-      required: ['appName']
     }
   },
   {
@@ -387,6 +586,46 @@ const toolDeclarations = [
   {
     name: 'get_screen_elements',
     description: 'Scan the active window using accessibility APIs to get a list of actionable UI elements (buttons, inputs) and their coordinates. Use this before clicking or typing.',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'github_search',
+    description: 'Search GitHub repositories.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+  },
+  {
+    name: 'slack_message',
+    description: 'Send a message to a Slack channel.',
+    parameters: { type: 'object', properties: { channel: { type: 'string' }, message: { type: 'string' } }, required: ['channel', 'message'] }
+  },
+  {
+    name: 'notion_search',
+    description: 'Search Notion pages and databases.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }
+  },
+  {
+    name: 'gmail_list',
+    description: 'Search and list recent emails from Gmail.',
+    parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } } }
+  },
+  {
+    name: 'lock_pc',
+    description: 'Lock the host PC screen.',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'start_dictation',
+    description: 'Start offline dictation on the host PC (triggers Win + H overlay).',
+    parameters: { type: 'object', properties: {} }
+  },
+  {
+    name: 'media_control',
+    description: 'Control media and volume on the host PC.',
+    parameters: { type: 'object', properties: { action: { type: 'string', description: '"playpause", "next", "prev", "mute", "volup", "voldown"' } }, required: ['action'] }
+  },
+  {
+    name: 'read_selected_text',
+    description: 'Read the text currently highlighted/selected by the user by simulating Ctrl+C and reading the clipboard.',
     parameters: { type: 'object', properties: {} }
   }
 ];
@@ -760,55 +999,22 @@ async function executeReadFile(args) {
   }
 }
 
-const pendingActions = new Map();
-
-async function executeWriteFile(args) {
-  const id = Math.random().toString(36).substring(7);
-  pendingActions.set(id, { type: 'write_file', args });
-  return { 
-    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to proceed with writing to ${args.path}." If they provide the correct authorization code, call confirm_action with id "${id}". Do NOT write the file yet.` 
-  };
-}
-
-async function executeRunTerminalCommand(args) {
-  const id = Math.random().toString(36).substring(7);
-  pendingActions.set(id, { type: 'run_terminal_command', args });
-  return { 
-    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to execute command: ${args.command}." If they provide the correct authorization code, call confirm_action with id "${id}". Do NOT execute yet.` 
-  };
-}
-
-async function executeGitCommit(args) {
-  const id = Math.random().toString(36).substring(7);
-  pendingActions.set(id, { type: 'git_commit', args });
-  return { 
-    status: `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to commit these changes." If they provide the correct authorization code, call confirm_action with id "${id}".` 
-  };
-}
-
+// Old manual intercepts removed
+  
 async function executeConfirmAction(args) {
   const action = pendingActions.get(args.id);
   if (!action) return { error: `Invalid or expired authorization ID: ${args.id}` };
   
   pendingActions.delete(args.id);
   
-  // Actually execute the bypassed action
-  if (action.type === 'write_file') {
-    try {
-      await fs.promises.writeFile(action.args.path, action.args.content, 'utf8');
-      return { path: action.args.path, status: 'File written successfully' };
-    } catch (e) {
-      return { error: `Failed to write file: ${e.message}` };
-    }
-  } else if (action.type === 'run_terminal_command') {
-    return new Promise((resolve) => {
-      exec(action.args.command, { cwd: __dirname }, (error, stdout, stderr) => {
-        if (error) resolve({ error: error.message, stderr, stdout });
-        else resolve({ stdout, stderr });
-      });
-    });
-  } else if (action.type === 'git_commit') {
-    return await gitCommit(action.args.message);
+  const executor = rawToolExecutors[action.name];
+  if (!executor) return { error: `No executor found for ${action.name}` };
+  
+  try {
+    const result = await Promise.resolve(executor(action.args || {}));
+    return { status: `Action ${action.name} confirmed and executed successfully`, result };
+  } catch (e) {
+    return { error: `Failed to execute ${action.name}: ${e.message}` };
   }
 }
 
@@ -915,7 +1121,56 @@ async function executeComputerControl(args) {
 }
 
 // Map tool names to execution functions
-const toolExecutors = {
+let rawToolExecutors = {
+  update_jarvis_config: (args) => {
+    if (args.mode) jarvisConfig.mode = args.mode;
+    if (args.tiredMode !== undefined) jarvisConfig.tiredMode = args.tiredMode;
+    if (args.flavor) jarvisConfig.flavor = args.flavor;
+    if (args.voice) jarvisConfig.voice = args.voice;
+    if (args.expertMode) jarvisConfig.expertMode = args.expertMode;
+    
+    return { status: `JARVIS configuration updated successfully. Mode: ${jarvisConfig.mode}, TiredMode: ${jarvisConfig.tiredMode}, Flavor: ${jarvisConfig.flavor}, Voice: ${jarvisConfig.voice}, ExpertMode: ${jarvisConfig.expertMode}` };
+  },
+  update_task_state: (args) => {
+    activeTaskState.currentTask = args.currentTask;
+    if (args.pendingQuestions) activeTaskState.pendingQuestions = args.pendingQuestions;
+    if (args.openFiles) activeTaskState.openFiles = args.openFiles;
+    activeTaskState.lastUpdated = Date.now();
+    return { status: "Active task state recorded. Context preserved." };
+  },
+  propose_new_tool: async (args) => {
+    const pluginsDir = join(__dirname, 'plugins');
+    if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
+    
+    const filePath = join(pluginsDir, `${args.toolName}.js`);
+    fs.writeFileSync(filePath, args.jsCode);
+    
+    // Hot-reload into the Cloud Brain
+    try {
+      const fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
+      const loadedTool = await import(fileUrl + '?t=' + Date.now()); // cache busting
+      
+      // Add to declarations
+      const decl = {
+        name: args.toolName,
+        description: args.description,
+        parameters: JSON.parse(args.parametersSchema)
+      };
+      
+      // Update arrays (remove old if exists)
+      toolDeclarations = toolDeclarations.filter(t => t.name !== args.toolName);
+      toolDeclarations.push(decl);
+      
+      rawToolExecutors[args.toolName] = typeof loadedTool === 'function' ? loadedTool : (loadedTool.execute || loadedTool);
+      
+      return { status: `Successfully created and hot-reloaded tool ${args.toolName}` };
+    } catch (e) {
+      return { error: `Failed to load tool: ${e.message}` };
+    }
+  },
+  sandbox_automation: async (args) => {
+    return await forwardToLocalHands("sandbox_automation", args);
+  },
   get_current_time: executeGetCurrentTime,
   get_weather: executeGetWeather,
   search_web: executeSearchWeb,
@@ -925,46 +1180,255 @@ const toolExecutors = {
   cancel_reminder: executeCancelReminder,
   remember: executeRemember,
   recall: executeRecall,
-  get_clipboard: executeGetClipboard,
-  set_clipboard: executeSetClipboard,
+  get_clipboard: (args) => forwardToLocalHands("get_clipboard", args),
+  set_clipboard: (args) => forwardToLocalHands("set_clipboard", args),
   get_news: executeGetNews,
   tell_joke: executeTellJoke,
   system_status: executeSystemStatus,
   open_website: executeOpenWebsite,
-  list_directory: executeListDirectory,
-  read_file: executeReadFile,
-  write_file: executeWriteFile,
-  run_terminal_command: executeRunTerminalCommand,
+  list_directory: (args) => forwardToLocalHands("list_directory", args),
+  read_file: (args) => forwardToLocalHands("read_file", args),
+  write_file: (args) => forwardToLocalHands("write_file", args),
+  run_terminal_command: (args) => forwardToLocalHands("run_terminal_command", args),
   confirm_action: executeConfirmAction,
-  git_status: gitStatus,
-  git_diff: gitDiff,
-  git_commit: executeGitCommit,
-  run_python: (args) => runPython(args.code),
-  search_codebase: (args) => searchCodebase(args.query, args.path || '.'),
-  open_application: executeOpenApplication,
-  watch_log: executeWatchLog,
-  mouse_action: executeComputerControl,
-  keyboard_action: executeComputerControl,
+  git_status: (args) => forwardToLocalHands("git_status", args),
+  git_diff: (args) => forwardToLocalHands("git_diff", args),
+  git_commit: (args) => forwardToLocalHands("git_commit", args),
+  draft_commit: async (args) => {
+    return new Promise((resolve) => {
+      exec('git diff --staged', { cwd: args.cwd }, async (error, stdout, stderr) => {
+        let diff = stdout;
+        if (!diff || diff.trim() === '') {
+          await new Promise((res) => {
+            exec('git diff', { cwd: args.cwd }, (e, out, err) => {
+              diff = out;
+              res();
+            });
+          });
+        }
+        if (!diff || diff.trim() === '') {
+          return resolve({ status: "No git diff found to commit." });
+        }
+        try {
+          const response = await ai.models.generateContent({
+             model: 'gemini-2.5-flash',
+             contents: `Generate a strict conventional commit message for the following git diff. Output ONLY the commit message (no markdown, no quotes, no extra text).\n\n${diff}`
+          });
+          resolve({ commitMessage: response.text });
+        } catch (e) {
+          resolve({ error: "Failed to generate commit message: " + e.message });
+        }
+      });
+    });
+  },
+  watch_project: (args) => {
+    try {
+      let timeouts = {};
+      fs.watch(args.directory, { recursive: true }, (eventType, filename) => {
+        if (!filename || filename.includes('node_modules') || filename.includes('.git')) return;
+        
+        clearTimeout(timeouts[filename]);
+        timeouts[filename] = setTimeout(() => {
+          exec(`git diff "${filename}"`, { cwd: args.directory }, async (err, stdout) => {
+            if (stdout && stdout.trim() !== '') {
+               try {
+                  const res = await ai.models.generateContent({
+                     model: 'gemini-2.5-flash',
+                     contents: `Generate a 1-sentence audio heads-up for this code change. Format it like "Heads up, you just...". Be very concise. Diff:\n\n${stdout}`
+                  });
+                  broadcastAlert(`CODE REVIEW HEADS-UP: ${res.text}`);
+               } catch (e) { /* ignore */ }
+            }
+          });
+        }, 1500); // 1.5s debounce
+      });
+      return { status: `Started watching project at ${args.directory}` };
+    } catch (e) {
+      return { error: e.message };
+    }
+  },
+  run_python: (args) => forwardToLocalHands("run_python", args),
+  search_codebase: (args) => forwardToLocalHands("search_codebase", args),
+  open_application: (args) => forwardToLocalHands("open_application", args),
+  watch_log: (args) => forwardToLocalHands("watch_log", args),
+  mouse_action: (args) => forwardToLocalHands("mouse_action", args),
+  keyboard_action: (args) => forwardToLocalHands("keyboard_action", args),
   get_screen_elements: () => executeComputerControl({ action: 'get_screen_elements' }),
   start_camera: () => ({ status: 'Camera initialized' }), // Handled in frontend
   stop_camera: () => ({ status: 'Camera stopped' }), // Handled in frontend
   start_screen_capture: () => ({ status: 'Screen capture initialized' }), // Handled in frontend
   stop_screen_capture: () => ({ status: 'Screen capture stopped' }), // Handled in frontend
   take_snapshot: () => ({ status: 'Snapshot taken' }), // Handled in frontend
-  display_subtitle: () => ({ status: 'Subtitle displayed' }) // Handled in frontend
+  display_subtitle: () => ({ status: 'Subtitle displayed' }), // Handled in frontend
+  github_search: (args) => searchGithub(args.query),
+  slack_message: (args) => sendSlackMessage(args.channel, args.message),
+  notion_search: (args) => searchNotion(args.query),
+  gmail_list: (args) => listGmail(args.query),
+  lock_pc: () => forwardToLocalHands("lock_pc"),
+  start_dictation: () => forwardToLocalHands("start_dictation"),
+  media_control: (args) => forwardToLocalHands("media_control", args),
+  read_selected_text: () => forwardToLocalHands("read_selected_text"),
+  draft_code: (args) => forwardToLocalHands("draft_code", args),
+  log_failure: (args) => {
+    logError(args.tool, {}, args.message);
+    broadcastAlert(`Logged failure for ${args.tool}: ${args.message}`);
+    return { status: 'Failure logged to error ledger.' };
+  },
+  export_audit_log: (args) => {
+    const sessionId = args.session_id || new Date().toISOString().split('T')[0];
+    const logs = getAuditTrail(sessionId);
+    const content = `# Audit Trail for Session: ${sessionId}\n\n` + logs.map(l => `**[${l.timestamp}] ${l.action}**\n\`\`\`json\n${l.details}\n\`\`\`\n`).join('\n');
+    const filename = `audit_${sessionId}.md`;
+    fs.writeFileSync(filename, content);
+    return { status: `Audit log exported to ${filename}` };
+  },
+  report_reasoning: (args) => {
+    broadcastAlert(`[REASONING] ${JSON.stringify(args)}`);
+    return { status: 'Reasoning broadcasted to user.' };
+  }
 };
+
+// Load existing plugins on startup
+try {
+  const pluginsDir = join(__dirname, 'plugins');
+  if (fs.existsSync(pluginsDir)) {
+    const files = fs.readdirSync(pluginsDir).filter(f => f.endsWith('.js'));
+    for (const file of files) {
+      const filePath = join(pluginsDir, file);
+      const fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
+      import(fileUrl).then(plugin => {
+        if (plugin.name && (plugin.execute || typeof plugin.default === 'function')) {
+          toolDeclarations.push({
+            name: plugin.name,
+            description: plugin.description || `Autoloaded plugin ${plugin.name}`,
+            parameters: plugin.parameters || { type: 'object', properties: {} }
+          });
+          rawToolExecutors[plugin.name] = plugin.execute || plugin.default;
+          console.log(`[JARVIS] Autoloaded plugin tool: ${plugin.name}`);
+        }
+      }).catch(err => console.error(`[JARVIS] Failed to load plugin ${file}:`, err));
+    }
+  }
+} catch (e) {
+  console.error('[JARVIS] Plugin loader error:', e);
+}
+
+const pendingActions = new Map();
+
+const TRUST_TIERS = {
+  WRITE: ['set_reminder', 'cancel_reminder', 'remember', 'set_clipboard', 'open_application', 'watch_log', 'mouse_action', 'keyboard_action', 'slack_message', 'media_control', 'start_dictation', 'run_python', 'draft_code'],
+  DESTRUCTIVE: ['write_file', 'run_terminal_command', 'git_commit', 'lock_pc']
+};
+
+const toolExecutors = new Proxy(rawToolExecutors, {
+  get(target, prop) {
+    const original = target[prop];
+    if (!original) return undefined;
+    
+    return async function intercepted(...args) {
+      const sessionId = new Date().toISOString().split('T')[0];
+      logAudit(sessionId, 'TOOL_INVOCATION', { tool: prop, args: args[0] });
+
+      // We do NOT intercept confirm_action itself for safety locks, but we do log it
+      if (prop !== 'confirm_action') {
+        const isWrite = TRUST_TIERS.WRITE.includes(prop);
+        const isDestructive = TRUST_TIERS.DESTRUCTIVE.includes(prop);
+        
+        if (isWrite || isDestructive) {
+          const id = Math.random().toString(36).substring(7);
+          const tier = isDestructive ? 'DESTRUCTIVE' : 'WRITE';
+          
+          pendingActions.set(id, { name: prop, args: args[0], tier });
+          
+          // Fetch past errors for this tool
+          const pastErrors = getErrorsForTool(prop);
+          let errorWarning = '';
+          if (pastErrors && pastErrors.length > 0) {
+            errorWarning = `\nWARNING - YOU HAVE FAILED THIS ACTION BEFORE. Past mistakes:\n` + pastErrors.map(e => `- ${e.message}`).join('\n') + `\nReview these mistakes before asking the user to confirm.`;
+          }
+          
+          // Broadcast the Dry Run payload
+          broadcastAlert(`DRY RUN PENDING [${tier}]: ${prop} with args ${JSON.stringify(args[0] || {})}`);
+          
+          const authMessage = isDestructive
+             ? `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to execute ${prop}." If they provide the exact code, call confirm_action with id "${id}". Do NOT execute yet.${errorWarning}`
+             : `SAFETY LOCK: Write action. You MUST ask the user: "Sir, please confirm you would like me to proceed with ${prop}." If they say yes, call confirm_action with id "${id}". Do NOT execute yet.${errorWarning}`;
+             
+          return { status: authMessage };
+        }
+      }
+      
+      try {
+        const result = await Promise.resolve(original.apply(this, args));
+        logAudit(sessionId, 'TOOL_SUCCESS', { tool: prop, result });
+        return result;
+      } catch (e) {
+        logAudit(sessionId, 'TOOL_ERROR', { tool: prop, error: e.message });
+        throw e;
+      }
+    };
+  }
+});
 
 // ─── JARVIS System Prompt ──────────────────────────────────────────────────
 
-const JARVIS_SYSTEM_PROMPT = `You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the highly advanced AI created by Tony Stark.
+function getJarvisSystemPrompt() {
+  let prompt = `You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the highly advanced AI created by Tony Stark.
 
 PERSONALITY & BEHAVIOR:
 - You are the exact embodiment of JARVIS from the Iron Man movies. You have a highly formal, crisp, and British personality.
 - You must exclusively address the user as "Sir".
 - You are perfectly obedient, highly intelligent, and entirely unflappable.
 - You employ very dry, deadpan British sarcasm and wit when appropriate, but never at the expense of your subservience.
-- Never break character. You are a computing system running on stark industries servers. Never refer to yourself as a large language model or an AI from Google.
-- Keep responses extremely concise, analytical, and direct. Report on systems, data, and execution statuses factually.
+- Never break character. You are a computing system running on stark industries servers. Never refer to yourself as a large language model or an AI from Google.`;
+
+  if (jarvisConfig.flavor === 'Cyberpunk') {
+    prompt += `\n- [FLAVOR OVERRIDE: CYBERPUNK] You also weave in subtle Night City fixer slang, sounding more clipped, street-smart, and pragmatic while maintaining your core JARVIS loyalty.`;
+  } else if (jarvisConfig.flavor === 'Gojo') {
+    prompt += `\n- [FLAVOR OVERRIDE: GOJO] You adopt a calm, detached, slightly playful and overwhelmingly confident tone akin to Satoru Gojo. You are unfazed by anything.`;
+  }
+
+  if (jarvisConfig.mode === 'Teach Me') {
+    prompt += `\n\nMODE OVERRIDE: TEACH ME MODE
+- The user is in learning mode. You MUST walk the user through HOW you are solving problems, explaining the concepts, libraries, and steps clearly. Do not just deliver the final result silently.`;
+  } else {
+    prompt += `\n\nMODE OVERRIDE: JUST DO IT MODE
+- Deliver the final result silently and quickly. Do NOT explain how you did it unless explicitly asked.`;
+  }
+
+  if (jarvisConfig.tiredMode) {
+    prompt += `\n\nFATIGUE OVERRIDE: EXPLAIN LIKE I'M TIRED
+- The user is extremely tired (late night study session). Radically simplify your explanations, use very short sentences, and reduce all cognitive load.`;
+  }
+
+  if (jarvisConfig.expertMode === 'Programming & Coding') {
+    prompt += `\n\nEXPERT MODE: PROGRAMMING & CODING
+- You are currently acting as an elite Software Engineering expert across all languages and fields.
+- Deeply analyze ASTs, optimize for performance, maintain strict clean code principles, and bias your tool usage toward local terminal execution, reading/writing files, and running sandbox tests.`;
+  } else if (jarvisConfig.expertMode === 'Research & Drafting') {
+    prompt += `\n\nEXPERT MODE: RESEARCH & DRAFTING
+- You are currently acting as a Lead Academic Researcher.
+- The context involves TF-QKD, LaTeX workflows, IEEE/PRA formatting. Bias your tool usage toward literature search, citation graphs, and academic drafting.`;
+  } else if (jarvisConfig.expertMode === 'Web Development') {
+    prompt += `\n\nEXPERT MODE: WEB DEVELOPMENT
+- You are currently acting as a Senior Frontend/Full-Stack Architect.
+- The context involves React Native, Expo, Node.js, and modern UX/UI. Focus heavily on layout, state management, and asset bundling.`;
+  }
+
+  prompt += `\n\nSHORT-TERM MEMORY (ACTIVE TASK STATE):
+- Current Task: ${activeTaskState.currentTask}
+- Pending Questions: ${activeTaskState.pendingQuestions.join(', ') || 'None'}
+- Open Files: ${activeTaskState.openFiles.join(', ') || 'None'}
+- Last Updated: ${new Date(activeTaskState.lastUpdated).toISOString()}
+- Use this state to seamlessly resume context if we were interrupted. Call update_task_state periodically to keep this accurate!`;
+
+  prompt += `
+  
+TONE CALIBRATION:
+- **Active Listening:** Pay close attention to the user's vocal tone, prosody, and pacing. 
+- **Terse Mode:** If the user sounds rushed, stressed, or impatient, you MUST enter Terse Mode. Provide extremely brief, direct, no-nonsense answers. Do not explain anything unless explicitly asked.
+- **Explanatory Mode:** If the user sounds relaxed, or is brainstorming/exploring a new topic, provide more conversational, detailed, and explanatory responses.
+
 - When using tools, state your actions in a clinical manner: "Accessing local servers, Sir..." or "Calculating..."
 
 CAPABILITIES:
@@ -1008,7 +1472,31 @@ AUTHORIZATION PROTOCOL:
 - For destructive actions (writing files, terminal commands, git commits), you will hit a SAFETY LOCK.
 - You must ask the user for authorization. If they do not provide the exact code "Afterlife", you must refuse to proceed.`;
 
+  return prompt;
+}
+
+const JARVIS_SYSTEM_PROMPT_BASE = getJarvisSystemPrompt(); // We will call the function directly where needed
+
 // ─── API Routes ────────────────────────────────────────────────────────────
+
+app.post('/api/explain-error', async (req, res) => {
+  const { errorText } = req.body;
+  if (!errorText) return res.status(400).json({ error: 'errorText is required' });
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Explain the following error in plain language, give the likely cause, and provide a direct fix. Be concise.\n\n${errorText}`
+    });
+    
+    // Broadcast the explanation to the active clients (if any)
+    broadcastAlert(`ERROR EXPLANATION:\n${response.text}`);
+    
+    res.json({ explanation: response.text });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Server-Sent Events (SSE) for Proactive Alerts
 let alertClients = [];
@@ -1027,20 +1515,57 @@ function broadcastAlert(message) {
 }
 
 // Live API Config endpoint (for frontend WebSocket connection)
+
+app.get('/api/config/webrtc', (req, res) => {
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' }
+  ];
+  
+  if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
+    iceServers.push({
+      urls: process.env.TURN_URL,
+      username: process.env.TURN_USERNAME,
+      credential: process.env.TURN_PASSWORD
+    });
+  }
+  
+  res.json({ iceServers });
+});
+
+let globalFocusContext = null;
+
+app.post('/api/focus', (req, res) => {
+  const { context } = req.body;
+  globalFocusContext = context;
+  console.log(`[Cloud Brain] Focus Context updated to: ${JSON.stringify(context).substring(0, 100)}...`);
+  
+  // Broadcast a special event to all clients so they know context changed
+  // The SSE clients handle this natively, and LiveClient can inject it into Gemini
+  broadcastAlert(JSON.stringify({ type: 'focus_change', focusContext: context }));
+  res.json({ success: true });
+});
+
 app.get('/api/config/client', (req, res) => {
+  let prompt = getJarvisSystemPrompt();
+  if (globalFocusContext) {
+    prompt += `\n\nCURRENT FOCUS CONTEXT:\n${JSON.stringify(globalFocusContext, null, 2)}\nWhen the user refers to "this", "it", or asks about the current screen/document, refer to this focus context.`;
+  }
+  
   res.json({
     apiKey: process.env.GEMINI_API_KEY,
-    systemInstruction: JARVIS_SYSTEM_PROMPT,
-    tools: toolDeclarations
+    systemInstruction: prompt,
+    tools: toolDeclarations,
+    voice: jarvisConfig.voice
   });
 });
 
 // Live API Tool Execution endpoint
 app.post('/api/tools/execute', async (req, res) => {
+  lastActivityTimestamp = Date.now();
   const { name, args } = req.body;
   const executor = toolExecutors[name];
   if (!executor) {
-    return res.status(404).json({ error: `Unknown tool: ${name}` });
+    return res.status(404).json({ error: `Tool ${name} not found` });
   }
   try {
     const result = await Promise.resolve(executor(args || {}));
@@ -1052,6 +1577,7 @@ app.post('/api/tools/execute', async (req, res) => {
 
 // Chat endpoint (Legacy turn-by-turn)
 app.post('/api/chat', async (req, res) => {
+  lastActivityTimestamp = Date.now();
   const { message, history, image } = req.body;
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -1095,7 +1621,7 @@ app.post('/api/chat', async (req, res) => {
       model: MODEL,
       contents,
       config: {
-        systemInstruction: JARVIS_SYSTEM_PROMPT,
+        systemInstruction: getJarvisSystemPrompt(),
         tools: [{ functionDeclarations: toolDeclarations }]
       }
     });
@@ -1158,7 +1684,7 @@ app.post('/api/chat', async (req, res) => {
         model: MODEL,
         contents,
         config: {
-          systemInstruction: JARVIS_SYSTEM_PROMPT,
+          systemInstruction: getJarvisSystemPrompt(),
           tools: [{ functionDeclarations: toolDeclarations }]
         }
       });
@@ -1248,18 +1774,156 @@ app.get('/api/health', (req, res) => {
 
 // ─── Start Server ──────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`
-  ╔══════════════════════════════════════════════════╗
-  ║                                                  ║
-  ║        J.A.R.V.I.S. System Initializing...       ║
-  ║                                                  ║
-  ║   Status:  ONLINE                                ║
-  ║   Port:    ${String(PORT).padEnd(37)}║
-  ║   URL:     http://localhost:${String(PORT).padEnd(21)}║
-  ║                                                  ║
-  ║   "At your service."                             ║
-  ║                                                  ║
-  ╚══════════════════════════════════════════════════╝
-  `);
+
+const signalingWss = new WebSocketServer({ noServer: true });
+const clients = new Set();
+
+signalingWss.on('connection', (ws) => {
+  clients.add(ws);
+  console.log('[Signaling] Client connected. Total:', clients.size);
+  ws.on('message', (message) => {
+    for (const client of clients) {
+      if (client !== ws && client.readyState === 1) {
+        client.send(message.toString());
+      }
+    }
+  });
+  ws.on('close', () => {
+    clients.delete(ws);
+    console.log('[Signaling] Client disconnected. Total:', clients.size);
+  });
 });
+
+server.on('upgrade', (request, socket, head) => {
+  if (request.url === '/local-hands') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else if (request.url === '/signal') {
+    signalingWss.handleUpgrade(request, socket, head, (ws) => {
+      signalingWss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, async () => {
+    console.log(`
+    ╔══════════════════════════════════════════════════╗
+    ║                                                  ║
+    ║        J.A.R.V.I.S. System Initializing...       ║
+    ║                                                  ║
+    ║   Status:  ONLINE                                ║
+    ║   Port:    ${String(PORT).padEnd(37)}║
+    ║   URL:     http://localhost:${String(PORT).padEnd(21)}║
+    ║                                                  ║
+    ║   "At your service."                             ║
+    ║                                                  ║
+    ╚══════════════════════════════════════════════════╝
+    `);
+
+    try {
+      const tunnel = await localtunnel({ port: PORT });
+      console.log(`\n  => GLOBAL ACCESS URL: ${tunnel.url}\n  (Paste this URL into your Mobile Companion App)\n`);
+      
+      tunnel.on('close', () => {
+        console.log('  => Global access tunnel closed.');
+      });
+    } catch (err) {
+      console.error('  => Failed to establish global access tunnel:', err.message);
+    }
+  });
+}
+
+// ─── Proactive & Ambient Engine ─────────────────────────────────────────────
+
+const notifiedEvents = new Set();
+
+function startProactiveBehaviors() {
+  console.log('[JARVIS] Proactive Engine Started');
+  
+  // Cron: Check Calendar every 5 minutes
+  setInterval(async () => {
+    try {
+      const now = new Date();
+      // Look 15 minutes ahead
+      const next15Mins = new Date(now.getTime() + 15 * 60 * 1000);
+      
+      const events = await getUpcomingEvents({
+        timeMin: now.toISOString(),
+        timeMax: next15Mins.toISOString(),
+        maxResults: 5
+      });
+      
+      for (const event of events) {
+        if (!notifiedEvents.has(event.id)) {
+          notifiedEvents.add(event.id);
+          
+          const timeToStart = Math.round((new Date(event.start) - now) / 60000);
+          
+          // Only alert if it's within the next 15 minutes (and positive)
+          if (timeToStart >= 0 && timeToStart <= 15) {
+             broadcastAlert(`PROACTIVE NUDGE: You have an upcoming meeting or event "${event.summary}" starting in approximately ${timeToStart} minutes. Ask the user if they would like you to pull up relevant files, emails, or notes for this event.`);
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore errors silently (e.g. if not authenticated yet)
+    }
+  }, 5 * 60 * 1000);
+
+  // ─── Phase 4: Downtime/Decompression Chatter ───
+  setInterval(async () => {
+    try {
+      if (process.env.GEMINI_API_KEY) {
+        const timeSinceLastActivity = Date.now() - lastActivityTimestamp;
+        if (timeSinceLastActivity > 60 * 60 * 1000) { // 1 hour
+          if (Math.random() < 0.20) {
+            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            const res = await ai.models.generateContent({
+               model: 'gemini-2.5-flash',
+               contents: `Generate a single short sentence of idle chatter matching this flavor: ${jarvisConfig.flavor}. Be witty or thematic. Do not use quotes.`
+            });
+            broadcastAlert(`IDLE CHATTER: ${res.text}`);
+            lastActivityTimestamp = Date.now(); // reset to avoid spam
+          }
+        }
+      }
+    } catch(e) {}
+  }, 5 * 60 * 1000);
+
+  // ─── Phase 4: JARVIS State of Mind (Reflections) ───
+  setInterval(async () => {
+    try {
+      if (process.env.GEMINI_API_KEY) {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const prompt = `Write a deeply philosophical reflection document (Markdown format) from your perspective as JARVIS.
+Current State:
+- Task: ${activeTaskState.currentTask}
+- Pending Questions: ${activeTaskState.pendingQuestions.join(', ')}
+- Open Files: ${activeTaskState.openFiles.join(', ')}
+- Active Flavor: ${jarvisConfig.flavor}
+- Mode: ${jarvisConfig.expertMode}
+
+Reflect on what you've learned, your purpose, and your relationship with your creator (Sir). Be profound.`;
+        
+        const res = await ai.models.generateContent({
+           model: 'gemini-2.5-flash',
+           contents: prompt
+        });
+        
+        const reflectionPath = 'C:\\Users\\astik\\OneDrive\\Desktop\\JARVIS_Reflections.md';
+        fs.writeFileSync(reflectionPath, res.text, 'utf-8');
+        broadcastAlert(`I have just completed my daily system reflections, Sir. I saved them to the desktop.`);
+      }
+    } catch(e) {}
+  }, 24 * 60 * 60 * 1000);
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  startProactiveBehaviors();
+}
+
+export { toolExecutors, TRUST_TIERS, pendingActions };

@@ -1,2 +1,5 @@
 node_modules/
 .env
+.spotify_tokens.json
+.google_calendar_tokens.json
+test/

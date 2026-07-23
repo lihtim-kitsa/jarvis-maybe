@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* ws://localhost:* wss://generativelanguage.googleapis.com wss://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:;">
+  <title>J.A.R.V.I.S. — Core Widget</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/index.css">
+  <link rel="stylesheet" href="css/widget.css">
+  <link rel="stylesheet" href="css/popups.css">
+</head>
+<body>
+  <script>window.API_BASE = "http://localhost:3000";</script>
+
+  <!-- Fullscreen Transparent Container -->
+  <div id="desktop-container">
+    
+    <!-- CORE WIDGET (Draggable) -->
+    <div class="widget" id="jarvis-widget">
+      <svg class="dial" id="dial" viewBox="0 0 220 220">
+        <!-- Ticks injected by JS -->
+      </svg>
+      <svg class="dial wave-layer" viewBox="0 0 220 220">
+        <path class="wave-ring" id="waveRing" d=""></path>
+      </svg>
+      <div class="core" id="core"></div>
+      <div class="label" id="state-label">IDLE</div>
+    </div>
+
+    <!-- CAPTION SYSTEM (Subtitles) -->
+    <div id="caption-container" class="caption-container hidden">
+      <div class="caption-text" id="caption-text"></div>
+    </div>
+
+
+
+    <!-- MODULAR POP-UPS -->
+    <!-- 1. Chat & Logs Panel -->
+    <div id="chat-popup" class="popup-panel hidden">
+      <div class="popup-header">
+        <span class="popup-title">COMMUNICATIONS & LOGS</span>
+        <button class="popup-close" id="chat-close">&times;</button>
+      </div>
+      <div class="popup-body">
+        <div id="chat-messages" class="chat-messages"></div>
+        <div id="activity-log" class="activity-log"></div>
+      </div>
+      <div class="popup-footer">
+        <input type="text" id="chat-input" class="chat-input" placeholder="Type a command..." autocomplete="off">
+        <button id="mic-button" class="mic-button" title="Voice Command">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 2. Vision Feed (Camera/Screen) -->
+    <div id="vision-popup" class="popup-panel vision-panel hidden">
+      <div class="popup-header">
+        <span class="popup-title">VISION FEED</span>
+        <div class="popup-actions">
+          <button id="camera-button" class="vision-toggle-btn" title="Toggle Camera">CAM</button>
+          <button id="screen-button" class="vision-toggle-btn" title="Toggle Screen Share">SCR</button>
+          <button class="popup-close" id="vision-close">&times;</button>
+        </div>
+      </div>
+      <div class="popup-body vision-body">
+        <video id="vision-video" autoplay playsinline muted></video>
+        <div id="vision-snapshot-container" class="hidden">
+          <img id="vision-snapshot" alt="Captured Frame" />
+        </div>
+        <div class="vision-overlay-data">
+          <span id="vision-status">INITIALIZING</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- API Key Modal (Centered, covers screen) -->
+  <div id="api-key-modal" class="modal-overlay">
+    <div class="modal-content">
+      <h1 class="modal-title">J.A.R.V.I.S.</h1>
+      <p class="modal-subtitle">Core Initialization</p>
+      <div class="modal-input-group">
+        <input type="password" id="api-key-input" class="modal-input" placeholder="Enter Gemini API Key...">
+        <button id="api-key-submit" class="modal-submit">BOOT</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/widget.js"></script>
+  <script src="js/webrtc.js"></script>
+  <script src="js/voice.js"></script>
+  <script src="js/live.js"></script>
+  <script src="js/vision.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/boot.js"></script>
+  <script src="js/drag.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-local-hands",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "daemon.js",
+  "scripts": {
+    "start": "node daemon.js"
+  },
+  "dependencies": {
+    "active-win": "^8.2.1",
+    "dotenv": "^16.4.7",
+    "ws": "^8.18.0"
+  }
+}
