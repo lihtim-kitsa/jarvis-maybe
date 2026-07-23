@@ -61,11 +61,21 @@
             }
 
             if (this.ws && this.isConnected) {
+               let sendText = `[SYSTEM ALERT] ${data.message}. Acknowledge this alert to the user proactively immediately.`;
+               
+               // Silently handle focus changes
+               try {
+                  const parsed = JSON.parse(data.message);
+                  if (parsed.type === 'focus_change') {
+                     sendText = `[SILENT CONTEXT UPDATE] The user's active screen/window has changed to: ${JSON.stringify(parsed.focusContext)}. Do NOT acknowledge this out loud.`;
+                  }
+               } catch(e) {}
+
                this.ws.send(JSON.stringify({
                   clientContent: {
                      turns: [{
                         role: 'user',
-                        parts: [{ text: `[SYSTEM ALERT] ${data.message}. Acknowledge this alert to the user proactively immediately.` }]
+                        parts: [{ text: sendText }]
                      }],
                      turnComplete: true
                   }
@@ -208,7 +218,13 @@
             return;
          }
 
-         if (msg.serverContent && msg.serverContent.modelTurn) {
+         if (msg.serverContent) {
+            if (msg.serverContent.interrupted) {
+               console.log('[Live] Server interrupted generation. Clearing playback buffer.');
+               this.interruptPlayback();
+            }
+
+            if (msg.serverContent.modelTurn) {
             const parts = msg.serverContent.modelTurn.parts;
             let hasAudio = false;
             let textBuffer = '';
@@ -235,9 +251,19 @@
                }, 3000);
             }
          }
+         }
 
          if (msg.toolCall) {
             this.handleToolCall(msg.toolCall);
+         }
+      }
+
+      interruptPlayback() {
+         if (this.playbackContext) {
+            this.playbackContext.close();
+            this.playbackContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+            this.nextPlaybackTime = 0;
+            if (window.setWidgetState) window.setWidgetState('idle');
          }
       }
 
@@ -503,6 +529,7 @@
             this.pttActive = true;
             this.micMuted = false;
             this.updateMicIndicator();
+            this.interruptPlayback(); // Instantly clear audio when user talks
          }
       }
 
