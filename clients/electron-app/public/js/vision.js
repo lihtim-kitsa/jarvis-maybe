@@ -13,7 +13,6 @@ let currentMode = null;
 
 visionClose.addEventListener('click', () => {
   stopVision();
-  visionPopup.classList.add('hidden');
 });
 
 function showVisionPopup() {
@@ -42,6 +41,18 @@ async function startVision(mode) {
     camBtn.classList.toggle('active', mode === 'camera');
     screenBtn.classList.toggle('active', mode === 'screen');
     
+    // Move widget to bottom right
+    const widget = document.getElementById('jarvis-widget');
+    if (widget && !widget.dataset.visionActive) {
+      widget.dataset.visionActive = 'true';
+      widget.dataset.wasLeft = widget.style.left;
+      widget.dataset.wasTop = widget.style.top;
+      widget.style.transition = 'left 0.5s cubic-bezier(0.4, 0, 0.2, 1), top 0.5s cubic-bezier(0.4, 0, 0.2, 1)';
+      widget.style.left = 'calc(100vw - 130px)';
+      widget.style.top = 'calc(100vh - 130px)';
+      setTimeout(() => { widget.style.transition = ''; }, 500);
+    }
+
     window.appendLog(`Vision system online: ${mode}`);
     return true;
   } catch (err) {
@@ -61,6 +72,18 @@ function stopVision() {
   camBtn.classList.remove('active');
   screenBtn.classList.remove('active');
   statusText.textContent = 'OFFLINE';
+
+  // Restore widget position
+  const widget = document.getElementById('jarvis-widget');
+  if (widget && widget.dataset.visionActive) {
+    widget.dataset.visionActive = '';
+    widget.style.transition = 'left 0.5s cubic-bezier(0.4, 0, 0.2, 1), top 0.5s cubic-bezier(0.4, 0, 0.2, 1)';
+    widget.style.left = widget.dataset.wasLeft || '';
+    widget.style.top = widget.dataset.wasTop || '';
+    setTimeout(() => { widget.style.transition = ''; }, 500);
+  }
+
+  visionPopup.classList.add('hidden');
 }
 
 camBtn.addEventListener('click', () => {

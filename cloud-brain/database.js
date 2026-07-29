@@ -59,6 +59,23 @@ db.exec(`
     details TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS news_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url_hash TEXT UNIQUE,
+    headline TEXT,
+    one_line TEXT,
+    detailed_summary TEXT,
+    key_entities TEXT,
+    why_it_matters TEXT,
+    source TEXT,
+    category TEXT,
+    image_url TEXT,
+    article_text TEXT,
+    published_at TEXT,
+    fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    embedding TEXT
+  );
 `);
 
 // ─── Vector Math ────────────────────────────────────────────────────────────
@@ -184,4 +201,63 @@ export function logAudit(session_id, action, details) {
 
 export function getAuditTrail(session_id) {
   return db.prepare('SELECT action, details, timestamp FROM audit_trail WHERE session_id = ? ORDER BY timestamp ASC').all(session_id);
+}
+
+// ─── News Pipeline Functions ────────────────────────────────────────────────
+
+export function upsertNewsItem(item) {
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO news_items
+      (url_hash, headline, one_line, detailed_summary, key_entities, why_it_matters, source, category, image_url, article_text, published_at, embedding)
+    VALUES
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const info = stmt.run(
+    item.url_hash,
+    item.headline,
+    item.one_line,
+    item.detailed_summary,
+    JSON.stringify(item.key_entities || []),
+    item.why_it_matters,
+    item.source,
+    item.category,
+    item.image_url || '',
+    item.article_text || '',
+    item.published_at,
+    item.embedding ? JSON.stringify(item.embedding) : '[]'
+  );
+  return info.changes > 0;
+}
+
+export function getRecentNews(category, limit = 5) {
+  if (category && category !== 'general') {
+    return db.prepare(
+      'SELECT id, url_hash, headline, one_line, detailed_summary, key_entities, why_it_matters, source, category, image_url, published_at, fetched_at FROM news_items WHERE category = ? ORDER BY published_at DESC LIMIT ?'
+    ).all(category, limit);
+  }
+  return db.prepare(
+    'SELECT id, url_hash, headline, one_line, detailed_summary, key_entities, why_it_matters, source, category, image_url, published_at, fetched_at FROM news_items ORDER BY published_at DESC LIMIT ?'
+  ).all(limit);
+}
+
+export function searchNews(queryEmbedding, limit = 5) {
+  const rows = db.prepare('SELECT id, headline, one_line, detailed_summary, key_entities, why_it_matters, source, category, image_url, published_at, article_text, embedding FROM news_items WHERE embedding IS NOT NULL').all();
+  const results = rows.map(row => {
+    const emb = JSON.parse(row.embedding);
+    if (!emb || emb.length === 0) return null;
+    const similarity = cosineSimilarity(queryEmbedding, emb);
+    return { ...row, similarity };
+  }).filter(r => r && r.similarity > 0.5);
+  results.sort((a, b) => b.similarity - a.similarity);
+  return results.slice(0, limit);
+}
+
+export function pruneOldNews(olderThanHours = 48) {
+  const stmt = db.prepare("DELETE FROM news_items WHERE fetched_at < datetime('now', ? || ' hours')");
+  const info = stmt.run(`-${olderThanHours}`);
+  return info.changes;
+}
+
+export function getNewsItemByHash(urlHash) {
+  return db.prepare('SELECT * FROM news_items WHERE url_hash = ?').get(urlHash);
 }

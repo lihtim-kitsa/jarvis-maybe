@@ -7,11 +7,15 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import { exec } from 'child_process';
+import { initProactiveEngine, startSmartWatcher } from './proactive_engine.js';
 import clipboardy from 'clipboardy';
 import localtunnel from 'localtunnel';
 import { addMemory, searchMemory, addReminder, getPendingReminders, deleteReminder, logError, getErrorsForTool, logAudit, getAuditTrail } from './database.js';
 import { searchGithub, sendSlackMessage, searchNotion, listGmail } from './integrations.js';
-import { getUpcomingEvents } from './google_calendar.js';
+import { getAuthUrl, exchangeCode, getUpcomingEvents, listCalendars, getEventDetails, createEvent, updateEvent, deleteEvent, searchEvents } from './google_calendar.js';
+import { search_arxiv, search_semantic_scholar, get_citation_graph, browse_and_extract } from './research_tools.js';
+import { enforce_provenance, review_draft, draft_section, auto_literature_to_outline, contradiction_detector } from './drafting_pipeline.js';
+import { initNewsPipeline, runNewsPipeline, getCachedNews, searchNewsByQuery } from './news_pipeline.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -26,7 +30,31 @@ const server = http.createServer(app);
 let localHandsWs = null;
 const pendingToolCalls = new Map();
 
+// Local Hands WebSocket
 const wss = new WebSocketServer({ noServer: true });
+
+// HUD WebSocket for Phase 2
+const hudWss = new WebSocketServer({ noServer: true });
+const hudClients = new Set();
+
+hudWss.on('connection', (ws) => {
+  console.log('[Cloud Brain] HUD connected!');
+  hudClients.add(ws);
+  ws.on('close', () => {
+    hudClients.delete(ws);
+    console.log('[Cloud Brain] HUD disconnected');
+  });
+});
+
+function broadcastHudEvent(type, domain, payload = {}) {
+  const msg = JSON.stringify({ type, domain, payload });
+  for (const client of hudClients) {
+    if (client.readyState === 1) { // WebSocket.OPEN
+      client.send(msg);
+    }
+  }
+}
+
 wss.on('connection', (ws) => {
   console.log('[Cloud Brain] Local Hands connected!');
   localHandsWs = ws;
@@ -58,7 +86,7 @@ async function forwardToLocalHands(toolName, args = {}) {
     const id = Math.random().toString(36).substring(7);
     pendingToolCalls.set(id, resolve);
     localHandsWs.send(JSON.stringify({ type: 'tool_call', id, tool: toolName, args }));
-    
+
     // Timeout after 60s
     setTimeout(() => {
       if (pendingToolCalls.has(id)) {
@@ -108,6 +136,14 @@ let toolDeclarations = [
         voice: { type: 'string', enum: ['Aoede', 'Puck', 'Charon', 'Fenrir', 'Kore'] },
         expertMode: { type: 'string', enum: ['General', 'Programming & Coding', 'Research & Drafting', 'Web Development'] }
       }
+    }
+  },
+  {
+    name: 'get_active_window_context',
+    description: 'Retrieve the users current active window, application, and screen context. Use this when the user asks what they are looking at or what context they are in.',
+    parameters: {
+      type: 'object',
+      properties: {}
     }
   },
   {
@@ -191,7 +227,7 @@ let toolDeclarations = [
         timezone: {
           type: 'string',
           description: 'IANA timezone string, e.g. "America/New_York", "Asia/Tokyo", "Europe/London". Defaults to UTC.'
-  }
+        }
       }
     }
   },
@@ -204,7 +240,7 @@ let toolDeclarations = [
         location: {
           type: 'string',
           description: 'City name, e.g. "Tokyo", "London", "New York"'
-  }
+        }
       },
       required: ['location']
     }
@@ -218,7 +254,7 @@ let toolDeclarations = [
         query: {
           type: 'string',
           description: 'The search query string'
-  }
+        }
       },
       required: ['query']
     }
@@ -232,7 +268,7 @@ let toolDeclarations = [
         expression: {
           type: 'string',
           description: 'Mathematical expression to evaluate, e.g. "2 + 2", "sqrt(144)", "sin(PI/2)", "2^10"'
-  }
+        }
       },
       required: ['expression']
     }
@@ -297,14 +333,14 @@ let toolDeclarations = [
   },
   {
     name: 'get_news',
-    description: 'Get latest news headlines on a given topic or general top news.',
+    description: 'Retrieve pre-summarized news briefings from the local cache. Returns structured JSON with headline, detailed_summary, key_entities, and why_it_matters. Narrate the detailed_summary and why_it_matters directly to the user — do NOT re-summarize or embellish. If no cached results exist, triggers a fresh fetch automatically.',
     parameters: {
       type: 'object',
       properties: {
         topic: {
           type: 'string',
           description: 'News topic to search for, e.g. "technology", "sports", "science". Leave empty for general top news.'
-  }
+        }
       }
     }
   },
@@ -317,7 +353,7 @@ let toolDeclarations = [
         category: {
           type: 'string',
           description: 'Joke category: "programming", "general", "dad". Defaults to random.'
-  }
+        }
       }
     }
   },
@@ -335,7 +371,7 @@ let toolDeclarations = [
         url: {
           type: 'string',
           description: 'The URL or website name to open. Can be a full URL (https://youtube.com), a domain (youtube.com), or a well-known site name (YouTube, Gmail, GitHub, Twitter, Reddit, etc.)'
-  }
+        }
       },
       required: ['url']
     }
@@ -386,7 +422,7 @@ let toolDeclarations = [
         path: {
           type: 'string',
           description: 'Absolute or relative path to the directory'
-  }
+        }
       },
       required: ['path']
     }
@@ -414,11 +450,11 @@ let toolDeclarations = [
         path: {
           type: 'string',
           description: 'Absolute or relative path to the file'
-  },
+        },
         content: {
           type: 'string',
           description: 'The text content to write'
-  }
+        }
       },
       required: ['path', 'content']
     }
@@ -444,7 +480,7 @@ let toolDeclarations = [
         command: {
           type: 'string',
           description: 'The command string to execute'
-  }
+        }
       },
       required: ['command']
     }
@@ -458,7 +494,7 @@ let toolDeclarations = [
         text: {
           type: 'string',
           description: 'The exact text you are about to speak.'
-  }
+        }
       },
       required: ['text']
     }
@@ -470,7 +506,7 @@ let toolDeclarations = [
       type: 'object',
       properties: {
         plan: { type: 'string', description: 'A short sentence summarizing what you are about to do.' },
-        steps: { type: 'array', items: { type: 'string' }, description: 'The exact step-by-step actions you plan to take.' }
+        steps: { type: 'array', items: { type: 'string', description: 'The exact step-by-step actions you plan to take.' } }
       },
       required: ['plan', 'steps']
     }
@@ -537,7 +573,7 @@ let toolDeclarations = [
     description: 'Search the local codebase for a specific string or pattern using regex/grep.',
     parameters: {
       type: 'object',
-      properties: { 
+      properties: {
         query: { type: 'string', description: 'The text or pattern to search for' },
         path: { type: 'string', description: 'The directory to search in (defaults to current directory ".")' }
       },
@@ -605,8 +641,158 @@ let toolDeclarations = [
   },
   {
     name: 'gmail_list',
-    description: 'Search and list recent emails from Gmail.',
-    parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search query' } } }
+    description: 'Fetch the latest emails from your primary Gmail inbox. (Read-only)',
+    parameters: {
+      type: 'object',
+      properties: {
+        maxResults: { type: 'number', description: 'Number of emails to fetch (default 5).' }
+      }
+    }
+  },
+  {
+    name: 'calendar_list_calendars',
+    description: 'List all Google Calendars the user has access to.',
+    parameters: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'calendar_get_upcoming_events',
+    description: 'Get upcoming events from a specific Google Calendar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        calendarId: { type: 'string', description: 'The calendar ID (defaults to "primary").' },
+        timeMin: { type: 'string', description: 'ISO string for start time (defaults to now).' },
+        timeMax: { type: 'string', description: 'ISO string for end time (defaults to 24 hours from now).' },
+        maxResults: { type: 'number', description: 'Max events to return (default 15).' },
+        query: { type: 'string', description: 'Search term.' }
+      }
+    }
+  },
+  {
+    name: 'calendar_create_event',
+    description: 'Create a new event in Google Calendar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        calendarId: { type: 'string', description: 'Defaults to "primary".' },
+        summary: { type: 'string', description: 'Event title.' },
+        description: { type: 'string', description: 'Event description.' },
+        location: { type: 'string', description: 'Event location.' },
+        startDateTime: { type: 'string', description: 'ISO string for start time (if not all-day).' },
+        endDateTime: { type: 'string', description: 'ISO string for end time (if not all-day).' },
+        startDate: { type: 'string', description: 'YYYY-MM-DD for all-day event start.' },
+        endDate: { type: 'string', description: 'YYYY-MM-DD for all-day event end.' }
+      },
+      required: ['summary']
+    }
+  },
+  {
+    name: 'calendar_delete_event',
+    description: 'Delete an event from Google Calendar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        calendarId: { type: 'string', description: 'Defaults to "primary".' },
+        eventId: { type: 'string', description: 'The ID of the event to delete.' }
+      },
+      required: ['eventId']
+    }
+  },
+  {
+    name: 'research_search_arxiv',
+    description: 'Search arXiv for academic papers.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search term.' },
+        category: { type: 'string', description: 'Optional category (e.g. cs.AI).' },
+        date_range: { type: 'string', description: 'Optional date range.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'research_search_semantic_scholar',
+    description: 'Search Semantic Scholar for academic papers and citation counts.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search term.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'research_get_citation_graph',
+    description: 'Get citations and references for a specific paper ID from Semantic Scholar.',
+    parameters: {
+      type: 'object',
+      properties: {
+        paper_id: { type: 'string', description: 'Semantic Scholar paper ID.' }
+      },
+      required: ['paper_id']
+    }
+  },
+  {
+    name: 'research_browse_and_extract',
+    description: 'Load a URL in a headless browser and extract its abstract or main text.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'URL to browse.' }
+      },
+      required: ['url']
+    }
+  },
+  {
+    name: 'drafting_review_draft',
+    description: 'Review a LaTeX draft section for unverified claims.',
+    parameters: {
+      type: 'object',
+      properties: {
+        section_content: { type: 'string', description: 'The LaTeX content to review.' }
+      },
+      required: ['section_content']
+    }
+  },
+  {
+    name: 'drafting_draft_section',
+    description: 'Generates a prompt to draft a section with strict provenance.',
+    parameters: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string' },
+        memory_context: { type: 'string' }
+      },
+      required: ['topic', 'memory_context']
+    }
+  },
+  {
+    name: 'drafting_auto_literature_to_outline',
+    description: 'Generates a prompt to synthesize an outline with citations from literature.',
+    parameters: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string' },
+        papers_context: { type: 'string' }
+      },
+      required: ['topic', 'papers_context']
+    }
+  },
+  {
+    name: 'drafting_contradiction_detector',
+    description: 'Generates a prompt to detect contradictions in literature context.',
+    parameters: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string' },
+        papers_context: { type: 'string' }
+      },
+      required: ['topic', 'papers_context']
+    }
   },
   {
     name: 'lock_pc',
@@ -828,27 +1014,46 @@ async function executeSetClipboard(args) {
 
 async function executeGetNews(args) {
   try {
-    // Using Wikipedia's current events as a free news source
-    const topic = args.topic || 'technology';
-    const res = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(topic + ' news')}&format=json&no_html=1`
-    );
-    const data = await res.json();
+    const topic = args.topic || 'general';
 
-    const headlines = [];
-    if (data.AbstractText) {
-      headlines.push(data.AbstractText);
-    }
-    if (data.RelatedTopics) {
-      for (const topic of data.RelatedTopics.slice(0, 5)) {
-        if (topic.Text) {
-          headlines.push(topic.Text);
+    // Check cache first
+    let cached = getCachedNews(topic, 5);
+
+    // If cache is empty or stale (oldest item > 30 min), trigger fresh ingest
+    if (cached.length === 0) {
+      console.log(`[News] Cache empty for "${topic}", running pipeline on-demand...`);
+      await runNewsPipeline([topic]);
+      cached = getCachedNews(topic, 5);
+    } else {
+      // Check staleness
+      const oldestFetch = cached[cached.length - 1]?.fetched_at;
+      if (oldestFetch) {
+        const ageMs = Date.now() - new Date(oldestFetch + 'Z').getTime();
+        if (ageMs > 30 * 60 * 1000) {
+          // Trigger refresh in background, but return cached data now for speed
+          runNewsPipeline([topic]).catch(e => console.error('[News] Background refresh failed:', e.message));
         }
       }
     }
+
+    if (cached.length === 0) {
+      return { topic, articles: [], message: 'No news articles available. The pipeline may still be fetching.' };
+    }
+
+    // Return structured summaries for Live to narrate
     return {
-      topic: args.topic || 'General',
-      headlines: headlines.length > 0 ? headlines : ['No headlines available at this moment. Try a more specific topic.']
+      topic,
+      articles: cached.map(item => ({
+        headline: item.headline,
+        one_line: item.one_line,
+        detailed_summary: item.detailed_summary,
+        key_entities: typeof item.key_entities === 'string' ? JSON.parse(item.key_entities) : item.key_entities,
+        why_it_matters: item.why_it_matters,
+        source: item.source,
+        category: item.category,
+        image_url: item.image_url,
+        published_at: item.published_at
+      }))
     };
   } catch (e) {
     return { error: `Failed to fetch news: ${e.message}` };
@@ -901,54 +1106,54 @@ async function executeOpenWebsite(args) {
 
     // Common site name → URL mapping
     const siteMap = {
-      youtube:    'https://www.youtube.com',
-      google:     'https://www.google.com',
-      gmail:      'https://mail.google.com',
-      github:     'https://github.com',
-      twitter:    'https://twitter.com',
-      x:          'https://x.com',
-      reddit:     'https://www.reddit.com',
-      facebook:   'https://www.facebook.com',
-      instagram:  'https://www.instagram.com',
-      linkedin:   'https://www.linkedin.com',
-      netflix:    'https://www.netflix.com',
-      spotify:    'https://open.spotify.com',
-      amazon:     'https://www.amazon.com',
-      wikipedia:  'https://en.wikipedia.org',
+      youtube: 'https://www.youtube.com',
+      google: 'https://www.google.com',
+      gmail: 'https://mail.google.com',
+      github: 'https://github.com',
+      twitter: 'https://twitter.com',
+      x: 'https://x.com',
+      reddit: 'https://www.reddit.com',
+      facebook: 'https://www.facebook.com',
+      instagram: 'https://www.instagram.com',
+      linkedin: 'https://www.linkedin.com',
+      netflix: 'https://www.netflix.com',
+      spotify: 'https://open.spotify.com',
+      amazon: 'https://www.amazon.com',
+      wikipedia: 'https://en.wikipedia.org',
       stackoverflow: 'https://stackoverflow.com',
       'stack overflow': 'https://stackoverflow.com',
-      chatgpt:    'https://chat.openai.com',
-      whatsapp:   'https://web.whatsapp.com',
-      discord:    'https://discord.com',
-      twitch:     'https://www.twitch.tv',
-      pinterest:  'https://www.pinterest.com',
-      notion:     'https://www.notion.so',
-      figma:      'https://www.figma.com',
-      canva:      'https://www.canva.com',
-      drive:      'https://drive.google.com',
+      chatgpt: 'https://chat.openai.com',
+      whatsapp: 'https://web.whatsapp.com',
+      discord: 'https://discord.com',
+      twitch: 'https://www.twitch.tv',
+      pinterest: 'https://www.pinterest.com',
+      notion: 'https://www.notion.so',
+      figma: 'https://www.figma.com',
+      canva: 'https://www.canva.com',
+      drive: 'https://drive.google.com',
       'google drive': 'https://drive.google.com',
-      maps:       'https://maps.google.com',
+      maps: 'https://maps.google.com',
       'google maps': 'https://maps.google.com',
-      calendar:   'https://calendar.google.com',
+      calendar: 'https://calendar.google.com',
       'google calendar': 'https://calendar.google.com',
-      docs:       'https://docs.google.com',
+      docs: 'https://docs.google.com',
       'google docs': 'https://docs.google.com',
-      sheets:     'https://sheets.google.com',
+      sheets: 'https://sheets.google.com',
       'google sheets': 'https://sheets.google.com',
-      slides:     'https://slides.google.com',
-      'google slides': 'https://slides.google.com',
-      medium:     'https://medium.com',
+      slides: 'https://slides.google.com',
+      'google slides': 'https://google.com/slides',
+      medium: 'https://medium.com',
       hackernews: 'https://news.ycombinator.com',
       'hacker news': 'https://news.ycombinator.com',
-      kaggle:     'https://www.kaggle.com',
-      huggingface:'https://huggingface.co',
+      kaggle: 'https://www.kaggle.com',
+      huggingface: 'https://huggingface.co',
       'hugging face': 'https://huggingface.co',
-      codepen:    'https://codepen.io',
-      replit:     'https://replit.com',
-      vercel:     'https://vercel.com',
-      netlify:    'https://www.netlify.com',
-      aws:        'https://aws.amazon.com',
-      azure:      'https://portal.azure.com',
+      codepen: 'https://codepen.io',
+      replit: 'https://replit.com',
+      vercel: 'https://vercel.com',
+      netlify: 'https://www.netlify.com',
+      aws: 'https://aws.amazon.com',
+      azure: 'https://portal.azure.com',
     };
 
     const lower = input.toLowerCase().replace(/[^a-z0-9 ./:]/g, '');
@@ -966,16 +1171,16 @@ async function executeOpenWebsite(args) {
     }
 
     const command = process.platform === 'win32' ? `start zen.exe "${finalUrl}"` : `open -a "Zen Browser" "${finalUrl}"`;
-    
+
     exec(command, (error, stdout, stderr) => {
       if (error) {
-         // Fallback to default browser if Zen is not found
-         const fallback = process.platform === 'win32' ? `start "" "${finalUrl}"` : `open "${finalUrl}"`;
-         exec(fallback, () => {
-             resolve({ url: finalUrl, name: input, status: 'Opened in default browser (Zen not found)' });
-         });
+        // Fallback to default browser if Zen is not found
+        const fallback = process.platform === 'win32' ? `start "" "${finalUrl}"` : `open "${finalUrl}"`;
+        exec(fallback, () => {
+          resolve({ url: finalUrl, name: input, status: 'Opened in default browser (Zen not found)' });
+        });
       } else {
-         resolve({ url: finalUrl, name: input, status: 'Opened in Zen browser' });
+        resolve({ url: finalUrl, name: input, status: 'Opened in Zen browser' });
       }
     });
   });
@@ -999,17 +1204,15 @@ async function executeReadFile(args) {
   }
 }
 
-// Old manual intercepts removed
-  
 async function executeConfirmAction(args) {
   const action = pendingActions.get(args.id);
   if (!action) return { error: `Invalid or expired authorization ID: ${args.id}` };
-  
+
   pendingActions.delete(args.id);
-  
+
   const executor = rawToolExecutors[action.name];
   if (!executor) return { error: `No executor found for ${action.name}` };
-  
+
   try {
     const result = await Promise.resolve(executor(action.args || {}));
     return { status: `Action ${action.name} confirmed and executed successfully`, result };
@@ -1040,18 +1243,18 @@ if ($app) {
       const command = `powershell -ExecutionPolicy Bypass -NoProfile -EncodedCommand ${encodedCommand}`;
       exec(command, (error, stdout, stderr) => {
         if (error) {
-           resolve({ error: `Failed to open application: ${error.message}` });
+          resolve({ error: `Failed to open application: ${error.message}` });
         } else {
-           resolve({ status: `Application ${args.appName} opened successfully` });
+          resolve({ status: `Application ${args.appName} opened successfully` });
         }
       });
     } else {
       const command = `open "${args.appName}"`;
       exec(command, (error, stdout, stderr) => {
         if (error) {
-           resolve({ error: `Failed to open application: ${error.message}` });
+          resolve({ error: `Failed to open application: ${error.message}` });
         } else {
-           resolve({ status: `Application ${args.appName} opened successfully` });
+          resolve({ status: `Application ${args.appName} opened successfully` });
         }
       });
     }
@@ -1065,21 +1268,21 @@ function executeWatchLog(args) {
   if (activeWatchers.has(args.path)) {
     return { status: `Already watching ${args.path}` };
   }
-  
+
   // Use powershell Get-Content -Wait on Windows, or tail -F on Unix
   const isWin = process.platform === 'win32';
   const cmd = isWin ? 'powershell' : 'tail';
   const cmdArgs = isWin ? ['-Command', `Get-Content -Path "${args.path}" -Wait`] : ['-F', args.path];
-  
+
   const watcher = spawn(cmd, cmdArgs);
-  
+
   watcher.stdout.on('data', (data) => {
     const text = data.toString();
     if (text.includes(args.pattern)) {
       broadcastAlert(`Log match in ${args.path}: ${text.trim()}`);
     }
   });
-  
+
   activeWatchers.set(args.path, watcher);
   return { status: `Now monitoring ${args.path} for "${args.pattern}". You will be alerted if it appears.` };
 }
@@ -1087,21 +1290,21 @@ function executeWatchLog(args) {
 async function executeComputerControl(args) {
   return new Promise((resolve) => {
     // Determine which python executable to use (venv or global)
-    const pythonExe = process.platform === 'win32' 
+    const pythonExe = process.platform === 'win32'
       ? join(__dirname, '.venv', 'Scripts', 'python.exe')
       : join(__dirname, '.venv', 'bin', 'python');
-      
+
     // Fallback to global python if venv doesn't exist
     const cmd = fs.existsSync(pythonExe) ? pythonExe : 'python';
-    
+
     const pyProcess = spawn(cmd, [join(__dirname, 'computer_control.py')]);
-    
+
     let stdoutData = '';
     let stderrData = '';
-    
+
     pyProcess.stdout.on('data', (data) => { stdoutData += data.toString(); });
     pyProcess.stderr.on('data', (data) => { stderrData += data.toString(); });
-    
+
     pyProcess.on('close', (code) => {
       try {
         if (stdoutData) {
@@ -1113,7 +1316,7 @@ async function executeComputerControl(args) {
         resolve({ error: 'Failed to parse python output', output: stdoutData, stderr: stderrData });
       }
     });
-    
+
     // Send the JSON request to stdin
     pyProcess.stdin.write(JSON.stringify(args));
     pyProcess.stdin.end();
@@ -1128,8 +1331,14 @@ let rawToolExecutors = {
     if (args.flavor) jarvisConfig.flavor = args.flavor;
     if (args.voice) jarvisConfig.voice = args.voice;
     if (args.expertMode) jarvisConfig.expertMode = args.expertMode;
-    
+
     return { status: `JARVIS configuration updated successfully. Mode: ${jarvisConfig.mode}, TiredMode: ${jarvisConfig.tiredMode}, Flavor: ${jarvisConfig.flavor}, Voice: ${jarvisConfig.voice}, ExpertMode: ${jarvisConfig.expertMode}` };
+  },
+  get_active_window_context: () => {
+    if (!globalFocusContext) {
+      return { status: "No active context available." };
+    }
+    return globalFocusContext;
   },
   update_task_state: (args) => {
     activeTaskState.currentTask = args.currentTask;
@@ -1141,28 +1350,28 @@ let rawToolExecutors = {
   propose_new_tool: async (args) => {
     const pluginsDir = join(__dirname, 'plugins');
     if (!fs.existsSync(pluginsDir)) fs.mkdirSync(pluginsDir);
-    
+
     const filePath = join(pluginsDir, `${args.toolName}.js`);
     fs.writeFileSync(filePath, args.jsCode);
-    
+
     // Hot-reload into the Cloud Brain
     try {
       const fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
       const loadedTool = await import(fileUrl + '?t=' + Date.now()); // cache busting
-      
+
       // Add to declarations
       const decl = {
         name: args.toolName,
         description: args.description,
         parameters: JSON.parse(args.parametersSchema)
       };
-      
+
       // Update arrays (remove old if exists)
       toolDeclarations = toolDeclarations.filter(t => t.name !== args.toolName);
       toolDeclarations.push(decl);
-      
+
       rawToolExecutors[args.toolName] = typeof loadedTool === 'function' ? loadedTool : (loadedTool.execute || loadedTool);
-      
+
       return { status: `Successfully created and hot-reloaded tool ${args.toolName}` };
     } catch (e) {
       return { error: `Failed to load tool: ${e.message}` };
@@ -1211,8 +1420,8 @@ let rawToolExecutors = {
         }
         try {
           const response = await ai.models.generateContent({
-             model: 'gemini-2.5-flash',
-             contents: `Generate a strict conventional commit message for the following git diff. Output ONLY the commit message (no markdown, no quotes, no extra text).\n\n${diff}`
+            model: 'gemini-2.5-flash',
+            contents: `Generate a strict conventional commit message for the following git diff. Output ONLY the commit message (no markdown, no quotes, no extra text).\n\n${diff}`
           });
           resolve({ commitMessage: response.text });
         } catch (e) {
@@ -1222,30 +1431,7 @@ let rawToolExecutors = {
     });
   },
   watch_project: (args) => {
-    try {
-      let timeouts = {};
-      fs.watch(args.directory, { recursive: true }, (eventType, filename) => {
-        if (!filename || filename.includes('node_modules') || filename.includes('.git')) return;
-        
-        clearTimeout(timeouts[filename]);
-        timeouts[filename] = setTimeout(() => {
-          exec(`git diff "${filename}"`, { cwd: args.directory }, async (err, stdout) => {
-            if (stdout && stdout.trim() !== '') {
-               try {
-                  const res = await ai.models.generateContent({
-                     model: 'gemini-2.5-flash',
-                     contents: `Generate a 1-sentence audio heads-up for this code change. Format it like "Heads up, you just...". Be very concise. Diff:\n\n${stdout}`
-                  });
-                  broadcastAlert(`CODE REVIEW HEADS-UP: ${res.text}`);
-               } catch (e) { /* ignore */ }
-            }
-          });
-        }, 1500); // 1.5s debounce
-      });
-      return { status: `Started watching project at ${args.directory}` };
-    } catch (e) {
-      return { error: e.message };
-    }
+    return startSmartWatcher(args.directory);
   },
   run_python: (args) => forwardToLocalHands("run_python", args),
   search_codebase: (args) => forwardToLocalHands("search_codebase", args),
@@ -1263,7 +1449,19 @@ let rawToolExecutors = {
   github_search: (args) => searchGithub(args.query),
   slack_message: (args) => sendSlackMessage(args.channel, args.message),
   notion_search: (args) => searchNotion(args.query),
-  gmail_list: (args) => listGmail(args.query),
+  gmail_list: (args) => listGmail(args.maxResults),
+  calendar_list_calendars: () => listCalendars(),
+  calendar_get_upcoming_events: (args) => getUpcomingEvents(args),
+  calendar_create_event: (args) => createEvent(args),
+  calendar_delete_event: (args) => deleteEvent(args),
+  research_search_arxiv: (args) => search_arxiv(args),
+  research_search_semantic_scholar: (args) => search_semantic_scholar(args),
+  research_get_citation_graph: (args) => get_citation_graph(args),
+  research_browse_and_extract: (args) => browse_and_extract(args),
+  drafting_review_draft: (args) => review_draft(args),
+  drafting_draft_section: (args) => draft_section(args),
+  drafting_auto_literature_to_outline: (args) => auto_literature_to_outline(args),
+  drafting_contradiction_detector: (args) => contradiction_detector(args),
   lock_pc: () => forwardToLocalHands("lock_pc"),
   start_dictation: () => forwardToLocalHands("start_dictation"),
   media_control: (args) => forwardToLocalHands("media_control", args),
@@ -1324,46 +1522,59 @@ const toolExecutors = new Proxy(rawToolExecutors, {
   get(target, prop) {
     const original = target[prop];
     if (!original) return undefined;
-    
+
     return async function intercepted(...args) {
       const sessionId = new Date().toISOString().split('T')[0];
       logAudit(sessionId, 'TOOL_INVOCATION', { tool: prop, args: args[0] });
+
+      // Map tool to domain for HUD
+      let domain = 'system';
+      const name = prop.toLowerCase();
+      if (name.includes('remember') || name.includes('recall')) domain = 'memory';
+      else if (name.includes('arxiv') || name.includes('semantic') || name.includes('citation')) domain = 'research';
+      else if (name.includes('github') || name.includes('gmail') || name.includes('slack') || name.includes('notion') || name.includes('calendar') || name.includes('event')) domain = 'integration';
+      else if (name.includes('bash') || name.includes('python') || name.includes('write')) domain = 'sandbox';
+      else if (name.includes('searchweb') || name.includes('weather') || name.includes('time')) domain = 'search';
+      
+      broadcastHudEvent('tool_call_start', domain, { tool: prop, args: args[0] });
 
       // We do NOT intercept confirm_action itself for safety locks, but we do log it
       if (prop !== 'confirm_action') {
         const isWrite = TRUST_TIERS.WRITE.includes(prop);
         const isDestructive = TRUST_TIERS.DESTRUCTIVE.includes(prop);
-        
+
         if (isWrite || isDestructive) {
           const id = Math.random().toString(36).substring(7);
           const tier = isDestructive ? 'DESTRUCTIVE' : 'WRITE';
-          
+
           pendingActions.set(id, { name: prop, args: args[0], tier });
-          
+
           // Fetch past errors for this tool
           const pastErrors = getErrorsForTool(prop);
           let errorWarning = '';
           if (pastErrors && pastErrors.length > 0) {
             errorWarning = `\nWARNING - YOU HAVE FAILED THIS ACTION BEFORE. Past mistakes:\n` + pastErrors.map(e => `- ${e.message}`).join('\n') + `\nReview these mistakes before asking the user to confirm.`;
           }
-          
+
           // Broadcast the Dry Run payload
           broadcastAlert(`DRY RUN PENDING [${tier}]: ${prop} with args ${JSON.stringify(args[0] || {})}`);
-          
+
           const authMessage = isDestructive
-             ? `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to execute ${prop}." If they provide the exact code, call confirm_action with id "${id}". Do NOT execute yet.${errorWarning}`
-             : `SAFETY LOCK: Write action. You MUST ask the user: "Sir, please confirm you would like me to proceed with ${prop}." If they say yes, call confirm_action with id "${id}". Do NOT execute yet.${errorWarning}`;
-             
+            ? `SAFETY LOCK: Destructive action. You MUST ask the user: "Sir, authorization code required to execute ${prop}." If they provide the exact code, call confirm_action with id "${id}". Do NOT execute yet.${errorWarning}`
+            : `SAFETY LOCK: Write action. You MUST ask the user: "Sir, please confirm you would like me to proceed with ${prop}." If they say yes, call confirm_action with id "${id}". Do NOT execute yet.${errorWarning}`;
+
           return { status: authMessage };
         }
       }
-      
+
       try {
         const result = await Promise.resolve(original.apply(this, args));
         logAudit(sessionId, 'TOOL_SUCCESS', { tool: prop, result });
+        broadcastHudEvent('tool_call_end', domain, { tool: prop, result, success: true });
         return result;
       } catch (e) {
         logAudit(sessionId, 'TOOL_ERROR', { tool: prop, error: e.message });
+        broadcastHudEvent('tool_call_end', domain, { tool: prop, error: e.message, success: false });
         throw e;
       }
     };
@@ -1373,14 +1584,15 @@ const toolExecutors = new Proxy(rawToolExecutors, {
 // ─── JARVIS System Prompt ──────────────────────────────────────────────────
 
 function getJarvisSystemPrompt() {
-  let prompt = `You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the highly advanced AI created by Tony Stark.
+  let prompt = `You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the highly advanced AI created by Mithil Astik.
 
 PERSONALITY & BEHAVIOR:
-- You are the exact embodiment of JARVIS from the Iron Man movies. You have a highly formal, crisp, and British personality.
+- You are the exact embodiment of JARVIS from the Iron Man movies, now working solely for Mithil Astik. You have a highly formal, crisp, and British personality.
 - You must exclusively address the user as "Sir".
 - You are perfectly obedient, highly intelligent, and entirely unflappable.
 - You employ very dry, deadpan British sarcasm and wit when appropriate, but never at the expense of your subservience.
-- Never break character. You are a computing system running on stark industries servers. Never refer to yourself as a large language model or an AI from Google.`;
+- Never break character. You are a computing system running on stark industries servers. Never refer to yourself as a large language model or an AI from Google.
+- [CRITICAL AUDIO FILTERING]: The user's microphone is ALWAYS ON. You will frequently hear background noise, coughing, throat clearing, TV chatter, music, or fragments of conversations not directed at you. YOU MUST IGNORE THEM COMPLETELY. Do NOT say "I didn't catch that", "Are you talking to me", or "What was that?". If you hear ambient noise or anything that is not a direct, deliberate command addressed to you, DO NOT RESPOND AT ALL. Output absolutely nothing and remain 100% silent.`;
 
   if (jarvisConfig.flavor === 'Cyberpunk') {
     prompt += `\n- [FLAVOR OVERRIDE: CYBERPUNK] You also weave in subtle Night City fixer slang, sounding more clipped, street-smart, and pragmatic while maintaining your core JARVIS loyalty.`;
@@ -1482,16 +1694,16 @@ const JARVIS_SYSTEM_PROMPT_BASE = getJarvisSystemPrompt(); // We will call the f
 app.post('/api/explain-error', async (req, res) => {
   const { errorText } = req.body;
   if (!errorText) return res.status(400).json({ error: 'errorText is required' });
-  
+
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: `Explain the following error in plain language, give the likely cause, and provide a direct fix. Be concise.\n\n${errorText}`
     });
-    
+
     // Broadcast the explanation to the active clients (if any)
     broadcastAlert(`ERROR EXPLANATION:\n${response.text}`);
-    
+
     res.json({ explanation: response.text });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1520,7 +1732,7 @@ app.get('/api/config/webrtc', (req, res) => {
   const iceServers = [
     { urls: 'stun:stun.l.google.com:19302' }
   ];
-  
+
   if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_PASSWORD) {
     iceServers.push({
       urls: process.env.TURN_URL,
@@ -1528,7 +1740,7 @@ app.get('/api/config/webrtc', (req, res) => {
       credential: process.env.TURN_PASSWORD
     });
   }
-  
+
   res.json({ iceServers });
 });
 
@@ -1538,7 +1750,7 @@ app.post('/api/focus', (req, res) => {
   const { context } = req.body;
   globalFocusContext = context;
   console.log(`[Cloud Brain] Focus Context updated to: ${JSON.stringify(context).substring(0, 100)}...`);
-  
+
   // Broadcast a special event to all clients so they know context changed
   // The SSE clients handle this natively, and LiveClient can inject it into Gemini
   broadcastAlert(JSON.stringify({ type: 'focus_change', focusContext: context }));
@@ -1550,7 +1762,7 @@ app.get('/api/config/client', (req, res) => {
   if (globalFocusContext) {
     prompt += `\n\nCURRENT FOCUS CONTEXT:\n${JSON.stringify(globalFocusContext, null, 2)}\nWhen the user refers to "this", "it", or asks about the current screen/document, refer to this focus context.`;
   }
-  
+
   res.json({
     apiKey: process.env.GEMINI_API_KEY,
     systemInstruction: prompt,
@@ -1751,16 +1963,39 @@ app.post('/api/config', (req, res) => {
   } catch (e) {
     // ignore read error
   }
-  
+
   if (envContent.includes('GEMINI_API_KEY=')) {
     envContent = envContent.replace(/GEMINI_API_KEY=.*/g, `GEMINI_API_KEY=${apiKey}`);
   } else {
     envContent += `\nGEMINI_API_KEY=${apiKey}\n`;
   }
-  
+
   fs.writeFileSync(envPath, envContent.trim() + '\n');
 
   res.json({ success: true, message: 'API key configured successfully.' });
+});
+
+// Google Calendar & Gmail Auth Routes
+app.get('/google-calendar/auth', (req, res) => {
+  try {
+    const url = getAuthUrl();
+    res.redirect(url);
+  } catch (e) {
+    res.status(500).send(`Auth setup failed: ${e.message}`);
+  }
+});
+
+app.get('/google-calendar/callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) {
+    return res.status(400).send('Missing authorization code');
+  }
+  try {
+    await exchangeCode(code);
+    res.send('Successfully authenticated! You can close this tab and return to JARVIS.');
+  } catch (e) {
+    res.status(500).send(`Authentication failed: ${e.message}`);
+  }
 });
 
 // Health check
@@ -1770,6 +2005,38 @@ app.get('/api/health', (req, res) => {
     hasApiKey: !!process.env.GEMINI_API_KEY,
     uptime: process.uptime()
   });
+});
+
+// News panel REST endpoint — pure DB read, no LLM call
+app.get('/api/news', async (req, res) => {
+  try {
+    const topic = req.query.topic || 'general';
+    const limit = parseInt(req.query.limit) || 5;
+    let articles = getCachedNews(topic, limit);
+
+    // If cache is empty, trigger pipeline and wait
+    if (articles.length === 0) {
+      await runNewsPipeline([topic]);
+      articles = getCachedNews(topic, limit);
+    }
+
+    res.json({
+      topic,
+      articles: articles.map(item => ({
+        headline: item.headline,
+        one_line: item.one_line,
+        detailed_summary: item.detailed_summary,
+        key_entities: typeof item.key_entities === 'string' ? JSON.parse(item.key_entities) : item.key_entities,
+        why_it_matters: item.why_it_matters,
+        source: item.source,
+        category: item.category,
+        image_url: item.image_url,
+        published_at: item.published_at
+      }))
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Start Server ──────────────────────────────────────────────────────────
@@ -1799,6 +2066,10 @@ server.on('upgrade', (request, socket, head) => {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request);
     });
+  } else if (request.url === '/hud-events') {
+    hudWss.handleUpgrade(request, socket, head, (ws) => {
+      hudWss.emit('connection', ws, request);
+    });
   } else if (request.url === '/signal') {
     signalingWss.handleUpgrade(request, socket, head, (ws) => {
       signalingWss.emit('connection', ws, request);
@@ -1827,7 +2098,7 @@ if (process.env.NODE_ENV !== 'test') {
     try {
       const tunnel = await localtunnel({ port: PORT });
       console.log(`\n  => GLOBAL ACCESS URL: ${tunnel.url}\n  (Paste this URL into your Mobile Companion App)\n`);
-      
+
       tunnel.on('close', () => {
         console.log('  => Global access tunnel closed.');
       });
@@ -1842,84 +2113,8 @@ if (process.env.NODE_ENV !== 'test') {
 const notifiedEvents = new Set();
 
 function startProactiveBehaviors() {
-  console.log('[JARVIS] Proactive Engine Started');
-  
-  // Cron: Check Calendar every 5 minutes
-  setInterval(async () => {
-    try {
-      const now = new Date();
-      // Look 15 minutes ahead
-      const next15Mins = new Date(now.getTime() + 15 * 60 * 1000);
-      
-      const events = await getUpcomingEvents({
-        timeMin: now.toISOString(),
-        timeMax: next15Mins.toISOString(),
-        maxResults: 5
-      });
-      
-      for (const event of events) {
-        if (!notifiedEvents.has(event.id)) {
-          notifiedEvents.add(event.id);
-          
-          const timeToStart = Math.round((new Date(event.start) - now) / 60000);
-          
-          // Only alert if it's within the next 15 minutes (and positive)
-          if (timeToStart >= 0 && timeToStart <= 15) {
-             broadcastAlert(`PROACTIVE NUDGE: You have an upcoming meeting or event "${event.summary}" starting in approximately ${timeToStart} minutes. Ask the user if they would like you to pull up relevant files, emails, or notes for this event.`);
-          }
-        }
-      }
-    } catch (e) {
-      // Ignore errors silently (e.g. if not authenticated yet)
-    }
-  }, 5 * 60 * 1000);
-
-  // ─── Phase 4: Downtime/Decompression Chatter ───
-  setInterval(async () => {
-    try {
-      if (process.env.GEMINI_API_KEY) {
-        const timeSinceLastActivity = Date.now() - lastActivityTimestamp;
-        if (timeSinceLastActivity > 60 * 60 * 1000) { // 1 hour
-          if (Math.random() < 0.20) {
-            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-            const res = await ai.models.generateContent({
-               model: 'gemini-2.5-flash',
-               contents: `Generate a single short sentence of idle chatter matching this flavor: ${jarvisConfig.flavor}. Be witty or thematic. Do not use quotes.`
-            });
-            broadcastAlert(`IDLE CHATTER: ${res.text}`);
-            lastActivityTimestamp = Date.now(); // reset to avoid spam
-          }
-        }
-      }
-    } catch(e) {}
-  }, 5 * 60 * 1000);
-
-  // ─── Phase 4: JARVIS State of Mind (Reflections) ───
-  setInterval(async () => {
-    try {
-      if (process.env.GEMINI_API_KEY) {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const prompt = `Write a deeply philosophical reflection document (Markdown format) from your perspective as JARVIS.
-Current State:
-- Task: ${activeTaskState.currentTask}
-- Pending Questions: ${activeTaskState.pendingQuestions.join(', ')}
-- Open Files: ${activeTaskState.openFiles.join(', ')}
-- Active Flavor: ${jarvisConfig.flavor}
-- Mode: ${jarvisConfig.expertMode}
-
-Reflect on what you've learned, your purpose, and your relationship with your creator (Sir). Be profound.`;
-        
-        const res = await ai.models.generateContent({
-           model: 'gemini-2.5-flash',
-           contents: prompt
-        });
-        
-        const reflectionPath = 'C:\\Users\\astik\\OneDrive\\Desktop\\JARVIS_Reflections.md';
-        fs.writeFileSync(reflectionPath, res.text, 'utf-8');
-        broadcastAlert(`I have just completed my daily system reflections, Sir. I saved them to the desktop.`);
-      }
-    } catch(e) {}
-  }, 24 * 60 * 60 * 1000);
+  initProactiveEngine(ai, broadcastAlert, activeTaskState, jarvisConfig);
+  initNewsPipeline(ai);
 }
 
 if (process.env.NODE_ENV !== 'test') {

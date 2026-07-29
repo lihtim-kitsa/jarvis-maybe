@@ -56,7 +56,11 @@ Like any good digital assistant, JARVIS comes with standard quality-of-life tool
 * **Reminders:** Set, list, and cancel local reminders.
 * **Web Search:** Perform live internet searches to fetch up-to-date information.
 * **Calculations:** Evaluate complex math expressions.
-* **Weather & News:** Fetch localized weather forecasts and top news headlines.
+* **Live News & Summary Panel:** When you ask for news, JARVIS slides in a dynamic, side-docked panel seamlessly integrated into its UI style. This panel features:
+  * **Visual Window:** A dedicated space showing a video snippet, live feed, or high-quality image from a reliable source (e.g., YouTube news).
+  * **Summarization Window:** A concise, text-based summary of the news story located below the visual feed.
+  * **Interactive Chat Block:** Located to the right of the media and summary windows, this block allows you to ask follow-up questions, discuss the news, or dive deeper into the topic without losing the visual context.
+* **Weather:** Fetch localized weather forecasts.
 * **System Commands:** Check system status, tell jokes, or open specific websites and applications autonomously.
 
 ---

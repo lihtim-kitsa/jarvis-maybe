@@ -15,11 +15,15 @@ window.showChatPopup = function() {
 };
 
 // Global functions for other modules to use
-window.appendMessage = function(role, text) {
+window.appendMessage = function(role, text, isHtml = false) {
   window.showChatPopup();
   const div = document.createElement('div');
   div.className = `message ${role}-message`;
-  div.textContent = text;
+  if (isHtml) {
+    div.innerHTML = text;
+  } else {
+    div.textContent = text;
+  }
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 };

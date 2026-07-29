@@ -30,7 +30,7 @@
          this.alertSource.onmessage = (e) => {
             const data = JSON.parse(e.data);
             console.log('[Live] Received System Alert:', data.message);
-            
+
             if (data.message.startsWith('[REASONING]')) {
                try {
                   const payload = JSON.parse(data.message.replace('[REASONING] ', ''));
@@ -40,9 +40,9 @@
                         html += `<li>⏳ ${step}</li>`;
                      }
                      html += `</ul>`;
-                     window.appendMessage('system', html);
+                     window.appendMessage('system', html, true);
                   }
-               } catch(err) {
+               } catch (err) {
                   console.error('Failed to parse reasoning payload', err);
                }
                // Do not echo the reasoning back to the model
@@ -61,15 +61,15 @@
             }
 
             if (this.ws && this.isConnected) {
-               let sendText = `[SYSTEM ALERT] ${data.message}. Acknowledge this alert to the user proactively immediately.`;
-               
-               // Silently handle focus changes
+               // Silently ignore focus changes so they don't interrupt JARVIS
                try {
                   const parsed = JSON.parse(data.message);
                   if (parsed.type === 'focus_change') {
-                     sendText = `[SILENT CONTEXT UPDATE] The user's active screen/window has changed to: ${JSON.stringify(parsed.focusContext)}. Do NOT acknowledge this out loud.`;
+                     return;
                   }
-               } catch(e) {}
+               } catch (e) { }
+
+               const sendText = `[SYSTEM ALERT] ${data.message}. Acknowledge this alert to the user proactively immediately.`;
 
                this.ws.send(JSON.stringify({
                   clientContent: {
@@ -108,7 +108,7 @@
                         speechConfig: {
                            voiceConfig: {
                               prebuiltVoiceConfig: {
-                                 voiceName: config.voice || "Aoede"
+                                 voiceName: config.voice || "Charon"
                               }
                            }
                         }
@@ -200,7 +200,7 @@
                      console.log('[Vision Gate] Pausing stream due to 5 minutes of inactivity.');
                      return;
                   }
-                  
+
                   const base64Frame = window.JarvisVision.captureFrameBase64();
                   if (base64Frame && this.isConnected) {
                      this.ws.send(JSON.stringify({
@@ -225,32 +225,32 @@
             }
 
             if (msg.serverContent.modelTurn) {
-            const parts = msg.serverContent.modelTurn.parts;
-            let hasAudio = false;
-            let textBuffer = '';
+               const parts = msg.serverContent.modelTurn.parts;
+               let hasAudio = false;
+               let textBuffer = '';
 
-            for (const part of parts) {
-               if (part.inlineData && part.inlineData.mimeType.startsWith('audio/pcm')) {
-                  this.playAudioChunk(part.inlineData.data);
-                  hasAudio = true;
+               for (const part of parts) {
+                  if (part.inlineData && part.inlineData.mimeType.startsWith('audio/pcm')) {
+                     this.playAudioChunk(part.inlineData.data);
+                     hasAudio = true;
+                  }
+                  if (part.text) {
+                     textBuffer += part.text;
+                  }
                }
-               if (part.text) {
-                  textBuffer += part.text;
-               }
-            }
 
-            if (textBuffer.trim().length > 0) {
-               window.appendMessage('jarvis', textBuffer);
-               this.showCaption(textBuffer);
+               if (textBuffer.trim().length > 0) {
+                  window.appendMessage('jarvis', textBuffer);
+                  this.showCaption(textBuffer);
+               }
+               if (hasAudio && window.setWidgetState) {
+                  window.setWidgetState('speaking');
+                  clearTimeout(this.idleTimeout);
+                  this.idleTimeout = setTimeout(() => {
+                     window.setWidgetState('idle');
+                  }, 3000);
+               }
             }
-            if (hasAudio && window.setWidgetState) {
-               window.setWidgetState('speaking');
-               clearTimeout(this.idleTimeout);
-               this.idleTimeout = setTimeout(() => {
-                  window.setWidgetState('idle');
-               }, 3000);
-            }
-         }
          }
 
          if (msg.toolCall) {

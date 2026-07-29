@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* ws://localhost:* wss://generativelanguage.googleapis.com wss://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* ws://localhost:* wss://generativelanguage.googleapis.com wss://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://*; media-src 'self' blob:; worker-src 'self' blob:;">
   <title>J.A.R.V.I.S. — Core Widget</title>
 
   <!-- Fonts -->
@@ -33,6 +33,9 @@
       <div class="core" id="core"></div>
       <div class="label" id="state-label">IDLE</div>
     </div>
+
+    <!-- TIME WIDGET -->
+    <div class="time-widget" id="ist-time-widget">00:00 IST</div>
 
     <!-- CAPTION SYSTEM (Subtitles) -->
     <div id="caption-container" class="caption-container hidden">
@@ -86,6 +89,36 @@
       </div>
     </div>
 
+    <!-- 3. Full Screen News Panel -->
+    <div id="news-popup" class="popup-panel fullscreen-panel hidden">
+      <div class="news-grid">
+        <div class="news-left">
+          <div class="visual-window">
+            <div class="visual-placeholder">VISUAL FEED (e.g. YouTube)</div>
+          </div>
+          <div class="summarization-window">
+            <div class="summary-placeholder">Generating summary of current events...</div>
+          </div>
+        </div>
+        <div class="news-right">
+          <div class="timeline-strip">
+            <h3 class="timeline-title">TODAY'S BLOCKS</h3>
+            <ul class="timeline-list">
+              <li>09:00 - Deep Work</li>
+              <li>11:30 - Review PRs</li>
+              <li>14:00 - Project Sync</li>
+            </ul>
+            <h3 class="timeline-title">DEADLINES</h3>
+            <ul class="timeline-list">
+              <li>Semester Coursework - Friday</li>
+              <li>Beijan Milestone - Next Wed</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <button class="popup-close fullscreen-close" id="news-close">&times;</button>
+    </div>
+
   </div>
 
   <!-- API Key Modal (Centered, covers screen) -->
@@ -109,5 +142,6 @@
   <script src="js/chat.js"></script>
   <script src="js/boot.js"></script>
   <script src="js/drag.js"></script>
+  <script src="js/news.js"></script>
 </body>
 </html>

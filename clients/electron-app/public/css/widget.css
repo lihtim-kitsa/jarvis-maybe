@@ -12,6 +12,7 @@
   cursor: grab;
   user-select: none;
   transition: transform 0.15s ease;
+  z-index: 50;
   /* JS handles dragging */
 }
 
@@ -99,4 +100,39 @@ svg.dial {
 
 @keyframes spin {
   to { transform: rotate(270deg) }
+}
+
+/* ================= TIME WIDGET ================= */
+.time-widget {
+  position: fixed;
+  top: calc(50% + 140px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--text);
+  background: rgba(10, 11, 13, 0.7);
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 50;
+  pointer-events: none;
+}
+
+/* ================= NEWS MODE TRANSITIONS ================= */
+body.news-mode-active .widget {
+  top: auto !important;
+  left: auto !important;
+  bottom: 40px !important;
+  right: 40px !important;
+  transform: scale(0.5) !important;
+}
+
+body.news-mode-active .time-widget {
+  top: 40px !important;
+  left: auto !important;
+  right: 40px !important;
+  transform: none !important;
 }
