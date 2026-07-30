@@ -3,3 +3,4 @@ node_modules/
 .spotify_tokens.json
 .google_calendar_tokens.json
 test/
+dist/
