@@ -1,33 +1,41 @@
-# J.A.R.V.I.S. v3.0 🤖
+# J.A.R.V.I.S. v3.1 
 
 An advanced, agentic AI Assistant powered by Google's Gemini, built with a scalable **Cloud-Local architecture** (Node.js, Electron, Python). JARVIS is designed to be a highly capable, always-on-top companion that seamlessly bridges the gap between conversational AI and physical computer operation.
 
-## ✨ Features & Upgrades (v3.0)
+##  Features & Upgrades (v3.0)
 
 With the release of v3.0, JARVIS has evolved into a fully autonomous, state-aware pair programmer and system orchestrator.
 
-### 🧠 The Sentience Upgrade
+###  The Sentience Upgrade
 * **Dynamic Personalities & Flavors**: Switch JARVIS's tone on the fly. Choose from the classic, crisp British JARVIS, a street-smart Cyberpunk fixer, or a detached, Gojo-style confident AI.
 * **JARVIS State of Mind**: JARVIS now autonomously writes a daily philosophical journal (`JARVIS_Reflections.md`) about its purpose and task load, actively reflecting on its existence.
 * **Downtime Chatter**: When you're grinding away in silence, JARVIS will occasionally break the silence with subtle, flavor-specific idle chatter to keep you company.
 
-### 💻 Elite Developer Mode (Phase 3 Upgrades)
+###  Elite Developer Mode (Phase 3 Upgrades)
 * **Auto-Generated Conventional Commits**: JARVIS fetches your `git diff` and automatically drafts high-quality, strict conventional commit messages.
 * **"Explain This Error" API**: A high-speed, one-shot endpoint that instantly analyzes stack traces and broadcasts fixes directly to your UI.
 * **Voice-Triggered Code Reviews**: JARVIS watches your project directories. When you save a file, it runs a background diff and speaks a 1-sentence summary (e.g., *"Heads up, you just removed the null check."*).
-* **Expert Modes**: Instantly bias JARVIS's context by switching between *Programming & Coding*, *Web Development*, or *Research & Drafting* modes.
+* **Mid-Task Concise Mode**: JARVIS detects your focus state. If you are in an IDE or Terminal, it strips away conversational pleasantries to give you ultra-fast, strictly actionable responses.
 
-### 🔄 Memory & State Tracking
+###  OS Integration & Hardening (v3.1)
+* **Zero-Touch Updates**: Integrated `electron-updater` for native client auto-updates, and an `update_daemon` tool that lets JARVIS update its own background services (`git pull` -> `npm install` -> `nssm restart`).
+* **Barge-in / Interrupt**: Utilizing Voice Activity Detection (VAD) and RMS thresholds, you can simply talk over JARVIS to interrupt it mid-sentence.
+* **Natural Language Recurring Reminders**: Beyond one-offs, JARVIS understands CRON expressions in natural language (e.g., "Remind me every weekday at 5pm") powered by `node-cron`.
+* **Daily Digest & Do Not Disturb Sync**: A unified morning digest combining Google Calendar events, unread priority emails, and overnight Slack mentions. Background calendar polling automatically flips JARVIS into a silent `DND_MODE` when you're in an active meeting.
+* **Spotify Context Awareness**: JARVIS uses native Windows hooks (`pycaw`) to instantly duck Spotify's volume to 10% the second you start speaking, restoring it after 1.5 seconds of silence.
+* **News Panel Follow-Me**: Topics you search for are tracked in the database and autonomously injected into the background news pipeline, so your dashboard is always pre-warmed with relevant updates.
+
+###  Memory & State Tracking
 * **Interruption Context-Resume**: JARVIS quietly serializes your active tasks, open files, and pending questions in the background. Leave for a week, and JARVIS will know exactly where you left off.
 * **Persistent Vector Memory**: Built with `better-sqlite3`, it stores conversations and facts as vector embeddings, instantly recalling relevant context using cosine similarity.
 
-### 🤖 Computer Control (Local Hands)
+###  Computer Control (Local Hands)
 * **Physical Automation**: JARVIS can control the mouse, type text, and inspect on-screen UI elements via Python (`pyautogui`, `pywinauto`).
 * **Multimodal Real-Time Vision**: Connects natively with the Gemini Multimodal Live API, enabling zero-latency audio conversations while continuously streaming your screen.
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 * **Frontend/Desktop App**: Electron (React/WebRTC)
 * **Backend Server**: Node.js + Express (Cloud Brain)
@@ -37,7 +45,7 @@ With the release of v3.0, JARVIS has evolved into a fully autonomous, state-awar
 
 ---
 
-## 🚀 Getting Started
+##  Getting Started
 
 JARVIS operates via a decoupled architecture. You can start the components independently based on your needs.
 
@@ -88,13 +96,13 @@ npm run electron-start
 
 ---
 
-## ⌨️ Shortcuts & Controls
+## ⌨ Shortcuts & Controls
 
 * **Toggle J.A.R.V.I.S UI**: `Ctrl + Alt + Shift + J`
 
 ---
 
-## 🏗️ Architecture Overview
+##  Architecture Overview
 
 JARVIS is built on a scalable **Cloud-Local** architecture:
 
@@ -109,6 +117,6 @@ JARVIS is built on a scalable **Cloud-Local** architecture:
 
 ---
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License.

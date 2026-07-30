@@ -3,8 +3,10 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import http from 'http';
 import { exec, spawn } from 'child_process';
 import clipboardy from 'clipboardy';
+import logger from './logger.js';
 import activeWinPkg from 'active-win';
 const activeWindow = activeWinPkg;
 import { gitStatus, gitDiff, gitCommit, runPython, searchCodebase, compile_latex, edit_latex_section } from './dev_tools.js';
@@ -20,18 +22,18 @@ const CLOUD_BRAIN_HTTP = CLOUD_BRAIN_URL.replace('ws://', 'http://').replace('ws
 const RECONNECT_INTERVAL = 5000;
 
 function connect() {
-  console.log(`Connecting to Cloud Brain at ${CLOUD_BRAIN_URL}...`);
+  logger.info(`Connecting to Cloud Brain at ${CLOUD_BRAIN_URL}...`);
   const ws = new WebSocket(CLOUD_BRAIN_URL);
 
   ws.on('open', () => {
-    console.log('Connected to Cloud Brain.');
+    logger.info('Connected to Cloud Brain.');
   });
 
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
       if (data.type === 'tool_call') {
-        console.log(`Executing forwarded tool: ${data.tool}`);
+        logger.info(`Executing forwarded tool: ${data.tool}`);
         const result = await executeTool(data.tool, data.args);
         ws.send(JSON.stringify({
           type: 'tool_result',
@@ -40,17 +42,17 @@ function connect() {
         }));
       }
     } catch (e) {
-      console.error('Error handling message:', e);
+      logger.error(`Error handling message: ${e.message}`);
     }
   });
 
   ws.on('close', () => {
-    console.log('Disconnected. Reconnecting in 5 seconds...');
+    logger.warn('Disconnected. Reconnecting in 5 seconds...');
     setTimeout(connect, RECONNECT_INTERVAL);
   });
 
   ws.on('error', (err) => {
-    console.error('WebSocket error:', err.message);
+    logger.error(`WebSocket error: ${err.message}`);
   });
 }
 
@@ -170,6 +172,22 @@ if ($app) {
   });
 }
 
+function executeUpdateDaemon(args) {
+  return new Promise((resolve) => {
+    logger.info('Starting local-hands daemon update...');
+    // Assuming root dir is JARVIS where git is initialized
+    const updateCommand = 'git pull && npm install && nssm restart JARVISHands';
+    exec(updateCommand, { cwd: path.join(__dirname, '..') }, (error, stdout, stderr) => {
+      if (error) {
+        logger.error(`Daemon update failed: ${error.message}`);
+        resolve({ error: `Daemon update failed: ${error.message}` });
+      } else {
+        resolve({ status: 'Daemon update initiated. The service will restart shortly.', output: stdout });
+      }
+    });
+  });
+}
+
 async function executeTool(toolName, args) {
   try {
     switch (toolName) {
@@ -196,7 +214,9 @@ async function executeTool(toolName, args) {
       case 'lock_pc': return await executeComputerControl({ action: 'lock_pc' });
       case 'start_dictation': return await executeComputerControl({ action: 'start_dictation' });
       case 'media_control': return await executeComputerControl({ action: 'media_control', media_action: args.action });
+      case 'spotify_volume': return await executeComputerControl({ action: 'spotify_volume', level: args.level });
       case 'read_selected_text': return await executeComputerControl({ action: 'read_selected_text' });
+      case 'update_daemon': return await executeUpdateDaemon(args);
       // TODO: Spotify auth/opening and watch log
       default:
         return { error: `Unknown tool requested by Cloud Brain: ${toolName}` };
@@ -207,6 +227,19 @@ async function executeTool(toolName, args) {
 }
 
 connect();
+
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+healthServer.listen(3001, () => {
+  logger.info('Local Hands health server listening on port 3001');
+});
 
 let lastFocusHash = '';
 
@@ -230,7 +263,7 @@ async function trackFocus() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ context: focusContext })
         });
-        console.log(`[Focus Tracker] Updated focus to: ${focusContext.title} (${focusContext.owner})`);
+        logger.info(`[Focus Tracker] Updated focus to: ${focusContext.title} (${focusContext.owner})`);
       }
     }
   } catch (err) {

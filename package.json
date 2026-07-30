@@ -8,6 +8,7 @@
     "start-brain": "cd cloud-brain && npm start",
     "start-hands": "cd local-hands && npm start",
     "electron-start": "electron .",
+    "build": "electron-builder",
     "test": "node --test"
   },
   "dependencies": {
@@ -16,10 +17,15 @@
     "better-sqlite3": "^12.11.1",
     "clipboardy": "^5.3.1",
     "dotenv": "^16.4.7",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.2",
+    "node-cron": "^4.6.0",
     "node-fetch": "^3.3.2",
+    "opossum": "^10.0.0",
     "puppeteer": "^25.3.0",
     "spotify-web-api-node": "^5.0.2",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
     "xml2js": "^0.6.2"
   },
   "keywords": [
@@ -33,6 +39,28 @@
   "license": "MIT",
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
-    "electron": "^43.1.1"
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.jarvis.ai",
+    "productName": "JARVIS",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "clients/electron-app/**/*",
+      "cloud-brain/**/*",
+      "local-hands/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**/*",
+      "**/node_modules/active-win/**/*",
+      "**/node_modules/puppeteer/**/*"
+    ]
   }
 }

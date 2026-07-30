@@ -6,6 +6,7 @@
 import fs from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { getToken, setToken } from './credentials.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,18 +22,22 @@ let tokens = null;
 
 // ─── Token Management ────────────────────────────────────────────────────────
 
-export function loadTokens() {
+export async function loadTokens() {
   try {
-    tokens = JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
-    return true;
+    const data = await getToken('google_calendar');
+    if (data) {
+      tokens = JSON.parse(data);
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
-function saveTokens(newTokens) {
+async function saveTokens(newTokens) {
   tokens = newTokens;
-  fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+  await setToken('google_calendar', JSON.stringify(tokens, null, 2));
 }
 
 function getCredentials() {
@@ -81,7 +86,7 @@ export async function exchangeCode(code) {
     refresh_token: data.refresh_token,
     expiry_date: Date.now() + data.expires_in * 1000
   };
-  saveTokens(newTokens);
+  await saveTokens(newTokens);
   return newTokens;
 }
 
@@ -104,12 +109,13 @@ async function refreshAccessToken() {
 
   tokens.access_token = data.access_token;
   tokens.expiry_date = Date.now() + data.expires_in * 1000;
-  saveTokens(tokens);
+  await saveTokens(tokens);
 }
 
 export async function getAccessToken() {
   if (!tokens) {
-    if (!loadTokens()) throw new Error('Not authenticated with Google Calendar. Please authenticate first.');
+    const loaded = await loadTokens();
+    if (!loaded) throw new Error('Not authenticated with Google Calendar. Please authenticate first.');
   }
   // Refresh if token expires within the next 60 seconds
   if (Date.now() >= tokens.expiry_date - 60_000) {

@@ -1,4 +1,47 @@
 import { getAccessToken } from './google_calendar.js';
+import CircuitBreaker from 'opossum';
+import logger from './logger.js';
+import { getToken } from './credentials.js';
+
+const createBreaker = (serviceName) => {
+  const breaker = new CircuitBreaker(async (url, options = {}) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+      const data = await response.json();
+      if (!response.ok) {
+        const errMsg = data.message || data.error?.message || data.error || `HTTP ${response.status}`;
+        throw new Error(errMsg);
+      }
+      return data;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      throw err;
+    }
+  }, {
+    timeout: 10000,
+    errorThresholdPercentage: 50,
+    resetTimeout: 30000
+  });
+
+  breaker.fallback(() => {
+    throw new Error(`${serviceName} is currently unavailable (Circuit Open)`);
+  });
+
+  breaker.on('open', () => logger.warn(`Circuit open for ${serviceName}`));
+  breaker.on('halfOpen', () => logger.info(`Circuit half-open for ${serviceName}`));
+  breaker.on('close', () => logger.info(`Circuit closed for ${serviceName}`));
+
+  return breaker;
+};
+
+const gmailBreaker = createBreaker('Gmail');
+const githubBreaker = createBreaker('GitHub');
+const slackBreaker = createBreaker('Slack');
+const notionBreaker = createBreaker('Notion');
+
 
 // ─── GMAIL INTEGRATION ───────────────────────────────────────────────────────
 export async function listGmail(query = '') {
@@ -8,19 +51,16 @@ export async function listGmail(query = '') {
     url.searchParams.set('maxResults', '5');
     if (query) url.searchParams.set('q', query);
 
-    const res = await fetch(url.toString(), {
+    const data = await gmailBreaker.fire(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Gmail API Error');
     
     if (!data.messages) return { messages: [] };
 
     const detailedMessages = await Promise.all(data.messages.map(async (msg) => {
-      const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`, {
+      const msgData = await gmailBreaker.fire(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From`, {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
-      const msgData = await msgRes.json();
       
       const subjectHeader = msgData.payload?.headers?.find(h => h.name === 'Subject');
       const fromHeader = msgData.payload?.headers?.find(h => h.name === 'From');
@@ -35,6 +75,7 @@ export async function listGmail(query = '') {
 
     return { messages: detailedMessages };
   } catch (error) {
+    logger.error(`Gmail integration error: ${error.message}`);
     return { error: `Failed to fetch Gmail: ${error.message}` };
   }
 }
@@ -42,18 +83,16 @@ export async function listGmail(query = '') {
 // ─── GITHUB INTEGRATION ──────────────────────────────────────────────────────
 export async function searchGithub(query) {
   try {
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) return { error: 'GITHUB_TOKEN is not configured in .env' };
+    const token = await getToken('github', 'GITHUB_TOKEN');
+    if (!token) return { error: 'GitHub token is not configured in OS keychain or .env' };
 
-    const res = await fetch(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=5`, {
+    const data = await githubBreaker.fire(`https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=5`, {
       headers: {
         'Authorization': `token ${token}`,
         'Accept': 'application/vnd.github.v3+json',
         'User-Agent': 'JARVIS-Assistant'
       }
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || 'GitHub API Error');
 
     return {
       results: data.items.map(item => ({
@@ -64,6 +103,7 @@ export async function searchGithub(query) {
       }))
     };
   } catch (error) {
+    logger.error(`GitHub integration error: ${error.message}`);
     return { error: `Failed to search GitHub: ${error.message}` };
   }
 }
@@ -71,10 +111,10 @@ export async function searchGithub(query) {
 // ─── SLACK INTEGRATION ───────────────────────────────────────────────────────
 export async function sendSlackMessage(channel, message) {
   try {
-    const token = process.env.SLACK_TOKEN;
-    if (!token) return { error: 'SLACK_TOKEN is not configured in .env' };
+    const token = await getToken('slack', 'SLACK_TOKEN');
+    if (!token) return { error: 'Slack token is not configured in OS keychain or .env' };
 
-    const res = await fetch('https://slack.com/api/chat.postMessage', {
+    const data = await slackBreaker.fire('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -85,11 +125,10 @@ export async function sendSlackMessage(channel, message) {
         text: message
       })
     });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || 'Slack API Error');
 
     return { status: 'Message sent successfully', channel: data.channel, ts: data.ts };
   } catch (error) {
+    logger.error(`Slack integration error: ${error.message}`);
     return { error: `Failed to send Slack message: ${error.message}` };
   }
 }
@@ -97,10 +136,10 @@ export async function sendSlackMessage(channel, message) {
 // ─── NOTION INTEGRATION ──────────────────────────────────────────────────────
 export async function searchNotion(query) {
   try {
-    const token = process.env.NOTION_TOKEN;
-    if (!token) return { error: 'NOTION_TOKEN is not configured in .env' };
+    const token = await getToken('notion', 'NOTION_TOKEN');
+    if (!token) return { error: 'Notion token is not configured in OS keychain or .env' };
 
-    const res = await fetch('https://api.notion.com/v1/search', {
+    const data = await notionBreaker.fire('https://api.notion.com/v1/search', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -112,8 +151,6 @@ export async function searchNotion(query) {
         page_size: 5
       })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || 'Notion API Error');
 
     return {
       results: data.results.map(page => {
@@ -131,6 +168,7 @@ export async function searchNotion(query) {
       })
     };
   } catch (error) {
+    logger.error(`Notion integration error: ${error.message}`);
     return { error: `Failed to search Notion: ${error.message}` };
   }
 }

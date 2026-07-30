@@ -10,7 +10,12 @@
       constructor() {
          this.ws = null;
          this.isConnected = false;
-
+         
+         this.reconnectAttempts = 0;
+         this.baseReconnectDelay = 1000;
+         this.maxReconnectDelay = 30000;
+         this.audioBuffer = []; // stores up to 3 seconds of base64 PCM frames
+         
          this.audioContext = null;
          this.audioWorklet = null;
          this.microphone = null;
@@ -96,6 +101,7 @@
 
             this.ws.onopen = () => {
                this.isConnected = true;
+               this.reconnectAttempts = 0; // Reset on successful connect
                if (this.onStateChange) this.onStateChange(true);
 
                const setupMessage = {
@@ -119,6 +125,22 @@
                this.ws.send(JSON.stringify(setupMessage));
 
                // Wait for setupComplete before starting capture
+               
+               // Flush buffered audio if reconnecting
+               if (this.audioBuffer.length > 0) {
+                  console.log(`[Live] Flushing ${this.audioBuffer.length} buffered audio frames`);
+                  while (this.audioBuffer.length > 0) {
+                     const base64 = this.audioBuffer.shift();
+                     this.ws.send(JSON.stringify({
+                        realtimeInput: {
+                           audio: {
+                              mimeType: 'audio/pcm;rate=16000',
+                              data: base64
+                           }
+                        }
+                     }));
+                  }
+               }
             };
 
             this.ws.onmessage = async (e) => {
@@ -146,22 +168,33 @@
 
             this.ws.onclose = (e) => {
                console.log('[Live] WebSocket closed', e.code, e.reason);
+               this.disconnect();
                if (e.code !== 1000 && e.code !== 1005) {
                   const activityLog = document.getElementById('activity-log');
                   if (activityLog) {
                      const entry = document.createElement('div');
                      entry.className = 'activity-entry';
-                     entry.innerHTML = `<span class="activity-text error">Socket Closed [${e.code}]: ${e.reason || 'Unknown Protocol Error'}</span>`;
+                     entry.innerHTML = `<span class="activity-text error">Socket Closed [${e.code}]: ${e.reason || 'Unknown Protocol Error'}. Reconnecting...</span>`;
                      activityLog.appendChild(entry);
                      activityLog.scrollTop = activityLog.scrollHeight;
                   }
+                  this.scheduleReconnect();
                }
-               this.disconnect();
             };
 
          } catch (e) {
             console.error('[Live] Connection failed', e);
+            this.scheduleReconnect();
          }
+      }
+
+      scheduleReconnect() {
+         const delay = Math.min(this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay);
+         this.reconnectAttempts++;
+         console.log(`[Live] Reconnecting in ${delay}ms (Attempt ${this.reconnectAttempts})...`);
+         setTimeout(() => {
+            this.connect();
+         }, delay);
       }
 
       disconnect() {
@@ -202,7 +235,12 @@
                   }
 
                   const base64Frame = window.JarvisVision.captureFrameBase64();
-                  if (base64Frame && this.isConnected) {
+                  if (base64Frame && this.isConnected && this.ws) {
+                     // Bandwidth fallback: Don't send vision if socket buffer is too large (256KB)
+                     if (this.ws.bufferedAmount > 256000) {
+                        console.log(`[Vision Gate] Dropping frame to prioritize audio. Buffer: ${this.ws.bufferedAmount} bytes.`);
+                        return;
+                     }
                      this.ws.send(JSON.stringify({
                         realtimeInput: {
                            video: {
@@ -422,18 +460,81 @@
             this.audioWorklet = new AudioWorkletNode(this.audioContext, 'pcm-processor');
 
             this.audioWorklet.port.onmessage = (e) => {
-               if (this.isConnected && this.ws.readyState === WebSocket.OPEN && !this.micMuted) {
+               if (!this.micMuted) {
                   const buffer = e.data;
-                  const base64 = this.arrayBufferToBase64(buffer);
-                  this.ws.send(JSON.stringify({
-                     realtimeInput: {
-                        audio: {
-                           mimeType: 'audio/pcm;rate=16000',
-                           data: base64
+                  const float32Array = new Float32Array(buffer);
+                  
+                  let sumSquares = 0;
+                  for (let i = 0; i < float32Array.length; i++) {
+                     sumSquares += float32Array[i] * float32Array[i];
+                  }
+                  const rms = Math.sqrt(sumSquares / float32Array.length);
+                  
+                  // False trigger reduction: drop frames that are basically silence/ambient room noise
+                  if (rms < 0.005) {
+                     if (this.isUserSpeaking) {
+                        this.silenceFrames = (this.silenceFrames || 0) + 1;
+                        // Approx 1.5 seconds of silence (at roughly 100 frames/sec)
+                        if (this.silenceFrames > 150) {
+                           this.isUserSpeaking = false;
+                           // Restore Spotify
+                           fetch(window.API_BASE + '/api/tools/execute', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ name: 'spotify_volume', args: { level: 'restore' } })
+                           }).catch(e => {});
                         }
                      }
-                  }));
-                  window.setWidgetState && window.setWidgetState('listening');
+                     return;
+                  }
+
+                  this.silenceFrames = 0;
+                  if (!this.isUserSpeaking) {
+                     this.isUserSpeaking = true;
+                     // Duck Spotify
+                     fetch(window.API_BASE + '/api/tools/execute', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: 'spotify_volume', args: { level: 'low' } })
+                     }).catch(e => {});
+                  }
+
+                  // Barge-in: If JARVIS is currently speaking and you speak loudly enough, interrupt it
+                  if (this.playbackContext && this.playbackContext.state === 'running') {
+                     if (rms > 0.02) { // Slightly higher threshold to intentionally interrupt
+                        console.log('[Live] Barge-in detected! Interrupting playback.');
+                        this.interruptPlayback();
+                        
+                        if (this.isConnected && this.ws.readyState === WebSocket.OPEN) {
+                           this.ws.send(JSON.stringify({
+                              clientContent: {
+                                 turns: [{ role: 'user', parts: [{ text: ' ' }] }],
+                                 turnComplete: false
+                              }
+                           }));
+                        }
+                     }
+                  }
+
+                  const base64 = this.arrayBufferToBase64(buffer);
+                  
+                  if (this.isConnected && this.ws.readyState === WebSocket.OPEN) {
+                     this.ws.send(JSON.stringify({
+                        realtimeInput: {
+                           audio: {
+                              mimeType: 'audio/pcm;rate=16000',
+                              data: base64
+                           }
+                        }
+                     }));
+                     window.setWidgetState && window.setWidgetState('listening');
+                  } else {
+                     // Buffer up to ~3 seconds (each frame is a fraction of a second; assume ~100 frames)
+                     this.audioBuffer.push(base64);
+                     if (this.audioBuffer.length > 100) {
+                        this.audioBuffer.shift();
+                     }
+                  }
                }
             };
 

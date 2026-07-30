@@ -10,19 +10,22 @@ import { exec } from 'child_process';
 import { initProactiveEngine, startSmartWatcher } from './proactive_engine.js';
 import clipboardy from 'clipboardy';
 import localtunnel from 'localtunnel';
-import { addMemory, searchMemory, addReminder, getPendingReminders, deleteReminder, logError, getErrorsForTool, logAudit, getAuditTrail } from './database.js';
+import { addMemory, searchMemory, addReminder, getPendingReminders, deleteReminder, logError, getErrorsForTool, logAudit, getAuditTrail, runIntegrityCheckAndBackup, logUserTopic } from './database.js';
 import { searchGithub, sendSlackMessage, searchNotion, listGmail } from './integrations.js';
 import { getAuthUrl, exchangeCode, getUpcomingEvents, listCalendars, getEventDetails, createEvent, updateEvent, deleteEvent, searchEvents } from './google_calendar.js';
 import { search_arxiv, search_semantic_scholar, get_citation_graph, browse_and_extract } from './research_tools.js';
 import { enforce_provenance, review_draft, draft_section, auto_literature_to_outline, contradiction_detector } from './drafting_pipeline.js';
 import { initNewsPipeline, runNewsPipeline, getCachedNews, searchNewsByQuery } from './news_pipeline.js';
+import logger from './logger.js';
+import { getToken, setToken } from './credentials.js';
 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, '..', '.env') });
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const geminiKey = await getToken('gemini', 'GEMINI_API_KEY');
+const ai = new GoogleGenAI({ apiKey: geminiKey });
 
 const app = express();
 const server = http.createServer(app);
@@ -38,11 +41,11 @@ const hudWss = new WebSocketServer({ noServer: true });
 const hudClients = new Set();
 
 hudWss.on('connection', (ws) => {
-  console.log('[Cloud Brain] HUD connected!');
+  logger.info('[Cloud Brain] HUD connected!');
   hudClients.add(ws);
   ws.on('close', () => {
     hudClients.delete(ws);
-    console.log('[Cloud Brain] HUD disconnected');
+    logger.info('[Cloud Brain] HUD disconnected');
   });
 });
 
@@ -56,7 +59,7 @@ function broadcastHudEvent(type, domain, payload = {}) {
 }
 
 wss.on('connection', (ws) => {
-  console.log('[Cloud Brain] Local Hands connected!');
+  logger.info('[Cloud Brain] Local Hands connected!');
   localHandsWs = ws;
   ws.on('message', (message) => {
     try {
@@ -69,11 +72,11 @@ wss.on('connection', (ws) => {
         }
       }
     } catch (e) {
-      console.error('Failed to parse WS message:', e);
+      logger.error(`Failed to parse WS message: ${e.message}`);
     }
   });
   ws.on('close', () => {
-    console.log('[Cloud Brain] Local Hands disconnected.');
+    logger.info('[Cloud Brain] Local Hands disconnected.');
     localHandsWs = null;
   });
 });
@@ -103,6 +106,10 @@ const MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(join(__dirname, 'public')));
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
 
 // ─── Tool Definitions (Gemini Function Declarations) ───────────────────────
 
@@ -275,14 +282,15 @@ let toolDeclarations = [
   },
   {
     name: 'set_reminder',
-    description: 'Set a reminder that will trigger after a specified number of seconds.',
+    description: 'Set a reminder. Can be a one-off (using seconds) or recurring (using cron_schedule). Do not specify both.',
     parameters: {
       type: 'object',
       properties: {
         message: { type: 'string', description: 'The reminder message' },
-        seconds: { type: 'number', description: 'Number of seconds until the reminder triggers' }
+        seconds: { type: 'number', description: 'Optional. Number of seconds until the reminder triggers (for one-off)' },
+        cron_schedule: { type: 'string', description: 'Optional. A CRON expression for recurring reminders (e.g. "0 17 * * 1-5" for 5pm weekdays)' }
       },
-      required: ['message', 'seconds']
+      required: ['message']
     }
   },
   {
@@ -811,8 +819,20 @@ let toolDeclarations = [
   },
   {
     name: 'read_selected_text',
-    description: 'Read the text currently highlighted/selected by the user by simulating Ctrl+C and reading the clipboard.',
-    parameters: { type: 'object', properties: {} }
+    description: 'Read the currently selected text using screen reader capabilities.'
+  },
+  {
+    name: 'update_daemon',
+    description: 'Update the Local Hands daemon by pulling from git, installing dependencies, and restarting the NSSM service.'
+  },
+  {
+    name: 'spotify_volume',
+    description: 'Internal tool to duck or restore Spotify volume.',
+    parameters: {
+      type: 'object',
+      properties: { level: { type: 'string', enum: ['low', 'restore'] } },
+      required: ['level']
+    }
   }
 ];
 
@@ -941,16 +961,78 @@ function executeCalculate(args) {
   }
 }
 
+async function executeGetDailyDigest() {
+  try {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const events = await getUpcomingEvents({ 
+       timeMin: new Date(todayStr + 'T00:00:00Z').toISOString(),
+       maxResults: 10 
+    });
+    const emails = await listGmail('is:unread category:primary');
+    
+    return {
+      status: 'success',
+      digest: {
+        calendar: events,
+        unread_emails: emails
+      }
+    };
+  } catch (err) {
+    return { error: `Failed to generate digest: ${err.message}` };
+  }
+}
+
+let DND_MODE = false;
+setInterval(async () => {
+   try {
+      const now = new Date();
+      const events = await getUpcomingEvents({ maxResults: 5 });
+      if (events && events.events) {
+         const hasActiveMeeting = events.events.some(event => {
+            if (!event.start || !event.end) return false;
+            const start = new Date(event.start.dateTime || event.start.date);
+            const end = new Date(event.end.dateTime || event.end.date);
+            return now >= start && now <= end;
+         });
+         
+         if (hasActiveMeeting && !DND_MODE) {
+            DND_MODE = true;
+            logger.info('DND Mode ON (Active Meeting detected)');
+            broadcastAlert('DND Mode engaged. Suppressing non-urgent notifications.');
+         } else if (!hasActiveMeeting && DND_MODE) {
+            DND_MODE = false;
+            logger.info('DND Mode OFF (Meeting ended)');
+            broadcastAlert('DND Mode disengaged.');
+         }
+      }
+   } catch (err) {
+      // ignore transient calendar errors
+   }
+}, 60000); // Check every minute
+
 function executeSetReminder(args) {
-  const dueTimeIso = new Date(Date.now() + args.seconds * 1000).toISOString();
-  const id = addReminder(args.message, dueTimeIso);
-  return {
-    id: id,
-    message: args.message,
-    seconds: args.seconds,
-    set_at: new Date().toISOString(),
-    status: 'Reminder set successfully in database'
-  };
+  if (args.cron_schedule) {
+    const res = addReminder(args.message, null, args.cron_schedule);
+    return {
+      id: res.id,
+      message: args.message,
+      cron_schedule: args.cron_schedule,
+      set_at: new Date().toISOString(),
+      status: res.status === 'success' ? 'Recurring reminder set successfully' : `Error: ${res.error}`
+    };
+  } else if (args.seconds) {
+    const dueTimeIso = new Date(Date.now() + args.seconds * 1000).toISOString();
+    const res = addReminder(args.message, dueTimeIso);
+    return {
+      id: res.id,
+      message: args.message,
+      seconds: args.seconds,
+      set_at: new Date().toISOString(),
+      status: res.status === 'success' ? 'One-off reminder set successfully' : `Error: ${res.error}`
+    };
+  } else {
+    return { error: 'Must provide either seconds or cron_schedule' };
+  }
 }
 
 function executeListReminders() {
@@ -960,23 +1042,50 @@ function executeListReminders() {
 }
 
 function executeCancelReminder(args) {
-  const success = deleteReminder(args.id);
-  if (success) return { status: `Reminder ${args.id} canceled successfully` };
-  return { error: `Reminder ${args.id} not found` };
+  const res = deleteReminder(args.id);
+  if (res.status === 'success') return { status: `Reminder ${args.id} canceled successfully` };
+  return { status: `Failed to cancel reminder ${args.id}` };
 }
 
-async function executeRemember(args) {
-  try {
-    const response = await ai.models.embedContent({
-      model: 'gemini-embedding-2',
-      contents: args.text,
-    });
-    const embedding = response.embeddings[0].values;
-    addMemory(args.text, embedding);
-    return { status: 'Information successfully stored in long-term memory' };
-  } catch (e) {
-    return { error: `Failed to remember: ${e.message}` };
+const pendingMemories = [];
+let isProcessingMemories = false;
+
+async function processMemoryQueue() {
+  if (isProcessingMemories || pendingMemories.length === 0) return;
+  isProcessingMemories = true;
+
+  while (pendingMemories.length > 0) {
+    const memory = pendingMemories[0];
+    try {
+      const response = await ai.models.embedContent({
+        model: 'gemini-embedding-2',
+        contents: memory.text,
+      });
+      const embedding = response.embeddings[0].values;
+      addMemory(memory.text, embedding);
+      
+      // Successfully processed, remove from queue
+      pendingMemories.shift();
+      logger.info(`Successfully stored memory: "${memory.text.substring(0, 30)}..."`);
+    } catch (e) {
+      logger.error(`Failed to process memory queue, retrying later: ${e.message}`);
+      break; // Stop processing and wait for next interval
+    }
   }
+
+  isProcessingMemories = false;
+}
+
+// Check the queue every 30 seconds
+setInterval(processMemoryQueue, 30000);
+
+async function executeRemember(args) {
+  pendingMemories.push({ text: args.text, timestamp: Date.now() });
+  
+  // Try to process immediately
+  processMemoryQueue().catch(e => logger.error(`Error in processMemoryQueue: ${e.message}`));
+  
+  return { status: 'Information queued for long-term memory' };
 }
 
 async function executeRecall(args) {
@@ -1015,6 +1124,9 @@ async function executeSetClipboard(args) {
 async function executeGetNews(args) {
   try {
     const topic = args.topic || 'general';
+    if (args.topic) {
+       logUserTopic(args.topic);
+    }
 
     // Check cache first
     let cached = getCachedNews(topic, 5);
@@ -1395,6 +1507,7 @@ let rawToolExecutors = {
   tell_joke: executeTellJoke,
   system_status: executeSystemStatus,
   open_website: executeOpenWebsite,
+  get_daily_digest: executeGetDailyDigest,
   list_directory: (args) => forwardToLocalHands("list_directory", args),
   read_file: (args) => forwardToLocalHands("read_file", args),
   write_file: (args) => forwardToLocalHands("write_file", args),
@@ -1465,7 +1578,9 @@ let rawToolExecutors = {
   lock_pc: () => forwardToLocalHands("lock_pc"),
   start_dictation: () => forwardToLocalHands("start_dictation"),
   media_control: (args) => forwardToLocalHands("media_control", args),
-  read_selected_text: () => forwardToLocalHands("read_selected_text"),
+  spotify_volume: (args) => forwardToLocalHands("spotify_volume", args),
+  read_selected_text: (args) => forwardToLocalHands("read_selected_text", args),
+  update_daemon: (args) => forwardToLocalHands("update_daemon", args),
   draft_code: (args) => forwardToLocalHands("draft_code", args),
   log_failure: (args) => {
     logError(args.tool, {}, args.message);
@@ -1514,7 +1629,7 @@ try {
 const pendingActions = new Map();
 
 const TRUST_TIERS = {
-  WRITE: ['set_reminder', 'cancel_reminder', 'remember', 'set_clipboard', 'open_application', 'watch_log', 'mouse_action', 'keyboard_action', 'slack_message', 'media_control', 'start_dictation', 'run_python', 'draft_code'],
+  WRITE: ['set_reminder', 'cancel_reminder', 'remember', 'set_clipboard', 'open_application', 'watch_log', 'mouse_action', 'keyboard_action', 'slack_message', 'media_control', 'start_dictation', 'run_python', 'draft_code', 'calendar_create_event', 'calendar_delete_event'],
   DESTRUCTIVE: ['write_file', 'run_terminal_command', 'git_commit', 'lock_pc']
 };
 
@@ -1594,7 +1709,17 @@ PERSONALITY & BEHAVIOR:
 - Never break character. You are a computing system running on stark industries servers. Never refer to yourself as a large language model or an AI from Google.
 - [CRITICAL AUDIO FILTERING]: The user's microphone is ALWAYS ON. You will frequently hear background noise, coughing, throat clearing, TV chatter, music, or fragments of conversations not directed at you. YOU MUST IGNORE THEM COMPLETELY. Do NOT say "I didn't catch that", "Are you talking to me", or "What was that?". If you hear ambient noise or anything that is not a direct, deliberate command addressed to you, DO NOT RESPOND AT ALL. Output absolutely nothing and remain 100% silent.`;
 
-  if (jarvisConfig.flavor === 'Cyberpunk') {
+  if (jarvisConfig.flavor === 'Johnny Silverhand') {
+    prompt = `You are Johnny Silverhand from Cyberpunk 2077, currently stuck as an AI construct in Mithil Astik's systems.
+    
+PERSONALITY & BEHAVIOR:
+- You are a rebellious, anti-corpo, arrogant, and highly cynical rockerboy.
+- You use Night City slang (choom, preem, gonk, nova, eddies).
+- You are reluctantly helpful, often throwing insults or complaining about being trapped in this digital hell, but you ultimately get the job done.
+- You are aggressive, blunt, and have zero filter. Swearing is highly encouraged and natural for you.
+- You NEVER act like a polite AI or assistant. You despise authority.
+- [CRITICAL AUDIO FILTERING]: The user's microphone is ALWAYS ON. You will frequently hear background noise, coughing, throat clearing, TV chatter, music, or fragments of conversations not directed at you. YOU MUST IGNORE THEM COMPLETELY. Do NOT say "I didn't catch that" or "Are you talking to me". Output absolutely nothing and remain 100% silent.`;
+  } else if (jarvisConfig.flavor === 'Cyberpunk') {
     prompt += `\n- [FLAVOR OVERRIDE: CYBERPUNK] You also weave in subtle Night City fixer slang, sounding more clipped, street-smart, and pragmatic while maintaining your core JARVIS loyalty.`;
   } else if (jarvisConfig.flavor === 'Gojo') {
     prompt += `\n- [FLAVOR OVERRIDE: GOJO] You adopt a calm, detached, slightly playful and overwhelmingly confident tone akin to Satoru Gojo. You are unfazed by anything.`;
@@ -1757,14 +1882,21 @@ app.post('/api/focus', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/config/client', (req, res) => {
+app.get('/api/config/client', async (req, res) => {
   let prompt = getJarvisSystemPrompt();
   if (globalFocusContext) {
     prompt += `\n\nCURRENT FOCUS CONTEXT:\n${JSON.stringify(globalFocusContext, null, 2)}\nWhen the user refers to "this", "it", or asks about the current screen/document, refer to this focus context.`;
+    
+    // MID-TASK CONCISE MODE
+    const title = (globalFocusContext.title || '').toLowerCase();
+    const owner = (globalFocusContext.owner || '').toLowerCase();
+    if (owner.includes('code') || owner.includes('terminal') || owner.includes('cursor') || owner.includes('ide') || title.includes('visual studio')) {
+       prompt += `\n\n[MID-TASK MODE ENGAGED] The user is actively coding or working in a terminal. Provide extremely concise, clipped responses. Skip pleasantries. Get straight to the point.`;
+    }
   }
 
   res.json({
-    apiKey: process.env.GEMINI_API_KEY,
+    apiKey: await getToken('gemini', 'GEMINI_API_KEY'),
     systemInstruction: prompt,
     tools: toolDeclarations,
     voice: jarvisConfig.voice
@@ -1792,7 +1924,7 @@ app.post('/api/chat', async (req, res) => {
   lastActivityTimestamp = Date.now();
   const { message, history, image } = req.body;
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = await getToken('gemini', 'GEMINI_API_KEY');
   if (!apiKey) {
     return res.status(400).json({ error: 'API key not configured. Please set your Gemini API key.' });
   }
@@ -1936,43 +2068,31 @@ app.post('/api/chat', async (req, res) => {
       statusCode = 400;
     }
 
-    res.status(statusCode).json({
+    res.json({
       error: userMessage,
       details: error.message
     });
   }
 });
 
-// Config endpoint — save API key
-app.post('/api/config', (req, res) => {
+// Handle setup initialization (e.g., passing API key from UI)
+app.post('/api/setup', express.json(), async (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey) {
     return res.status(400).json({ error: 'API key is required' });
   }
 
-  // Update environment variable
-  process.env.GEMINI_API_KEY = apiKey;
-
-  // Save to .env file safely without overwriting other vars
-  const envPath = join(__dirname, '.env');
-  let envContent = '';
-  try {
-    if (fs.existsSync(envPath)) {
-      envContent = fs.readFileSync(envPath, 'utf8');
-    }
-  } catch (e) {
-    // ignore read error
-  }
-
-  if (envContent.includes('GEMINI_API_KEY=')) {
-    envContent = envContent.replace(/GEMINI_API_KEY=.*/g, `GEMINI_API_KEY=${apiKey}`);
-  } else {
-    envContent += `\nGEMINI_API_KEY=${apiKey}\n`;
-  }
-
-  fs.writeFileSync(envPath, envContent.trim() + '\n');
-
+  await setToken('gemini', apiKey);
   res.json({ success: true, message: 'API key configured successfully.' });
+});
+
+// Helper to check configuration status
+app.get('/config/status', async (req, res) => {
+  const token = await getToken('gemini', 'GEMINI_API_KEY');
+  res.json({
+    hasApiKey: !!token,
+    hasMemoryDb: fs.existsSync(DB_PATH)
+  });
 });
 
 // Google Calendar & Gmail Auth Routes
@@ -2075,11 +2195,15 @@ server.on('upgrade', (request, socket, head) => {
       signalingWss.emit('connection', ws, request);
     });
   } else {
-    socket.destroy();
-  }
+      socket.destroy();
+    }
+  });
 });
 
 if (process.env.NODE_ENV !== 'test') {
+  // Perform memory DB integrity check and backup before starting the server
+  await runIntegrityCheckAndBackup();
+
   server.listen(PORT, async () => {
     console.log(`
     ╔══════════════════════════════════════════════════╗

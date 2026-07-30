@@ -9,6 +9,8 @@
   "dependencies": {
     "active-win": "^8.2.1",
     "dotenv": "^16.4.7",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
     "ws": "^8.18.0"
   }
 }

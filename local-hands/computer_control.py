@@ -135,6 +135,21 @@ def read_selected_text():
     result = subprocess.run(['powershell', '-command', 'Get-Clipboard'], capture_output=True, text=True)
     return {"text": result.stdout.strip()}
 
+def spotify_volume_control(level):
+    try:
+        from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+        sessions = AudioUtilities.GetAllSessions()
+        for session in sessions:
+            volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+            if session.Process and session.Process.name().lower() == "spotify.exe":
+                if level == "low":
+                    volume.SetMasterVolume(0.1, None)
+                elif level == "restore":
+                    volume.SetMasterVolume(1.0, None)
+        return {"status": f"Spotify volume set to {level}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     try:
         input_data = sys.stdin.read()
@@ -168,6 +183,8 @@ if __name__ == "__main__":
             result = media_control(req.get("media_action"))
         elif action == "read_selected_text":
             result = read_selected_text()
+        elif action == "spotify_volume":
+            result = spotify_volume_control(req.get("level", "restore"))
         elif action == "sandbox_automation":
             actions = req.get("actions", [])
             log = []

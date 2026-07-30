@@ -5,7 +5,7 @@
 
 import crypto from 'crypto';
 import { parseStringPromise } from 'xml2js';
-import { upsertNewsItem, getRecentNews, searchNews, pruneOldNews } from './database.js';
+import { upsertNewsItem, getRecentNews, searchNews, pruneOldNews, getTopUserTopics } from './database.js';
 
 let ai = null;
 
@@ -278,14 +278,16 @@ const DEFAULT_RSS_FEEDS = [
  * topics: array of strings like ['general', 'technology', 'AI']
  */
 export async function runNewsPipeline(topics = ['general']) {
-  console.log(`[News Pipeline] Starting ingest for topics: ${topics.join(', ')}`);
+  const userTopics = getTopUserTopics(3);
+  const mergedTopics = [...new Set([...topics, ...userTopics])];
+  console.log(`[News Pipeline] Starting ingest for topics: ${mergedTopics.join(', ')}`);
   let totalIngested = 0;
 
   // Phase 1: Collect raw articles from all sources
   let allArticles = [];
 
   // GNews for each topic
-  for (const topic of topics) {
+  for (const topic of mergedTopics) {
     const gnewsArticles = await fetchFromGNews(topic);
     allArticles.push(...gnewsArticles);
   }
